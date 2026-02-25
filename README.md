@@ -35,8 +35,8 @@ But `systemd-creds` doesn't support this syntax ([systemd issue #38763](https://
 ```bash
 # Seal against expected PCR 15 value (after your boot process extends it)
 echo "my-secret" | mkcreds \
-    --name mycred \
-    --tpm2-pcrs="7+15:sha256=9305fd411ed713f0e9e3f116880563f2d06a3f85d8cf8c5041d4479da2e0fea8"
+    --tpm2-pcrs="7+15:sha256=9305fd411ed713f0e9e3f116880563f2d06a3f85d8cf8c5041d4479da2e0fea8" \
+    - mycred.cred
 ```
 
 The resulting credential can be decrypted with standard `systemd-creds`:
@@ -65,19 +65,51 @@ Requires `tpm2-tss` development libraries and `pkg-config`.
 
 ## Usage
 
+The CLI is designed to be compatible with `systemd-creds encrypt`:
+
+```
+mkcreds [OPTIONS] --tpm2-pcrs=PCRS INPUT OUTPUT
+```
+
 ### Basic (use current PCR values)
 
 ```bash
-echo "secret-data" | mkcreds --name mycred --tpm2-pcrs=7+15 > mycred.cred
+# Input from file, output to file
+mkcreds --tpm2-pcrs=7+15 secret.txt mycred.cred
+
+# Input from stdin, output to stdout
+echo "secret-data" | mkcreds --tpm2-pcrs=7+15 - -
+
+# Input from stdin, output to file (name auto-derived from filename)
+echo "secret-data" | mkcreds --tpm2-pcrs=7+15 - mycred.cred
 ```
 
 ### With expected PCR values
 
 ```bash
 echo "secret-data" | mkcreds \
-    --name mycred \
     --tpm2-pcrs="7+15:sha256=<expected-hex-value>" \
-    --output mycred.cred
+    - mycred.cred
+```
+
+### With credential expiration
+
+```bash
+# Expire in 7 days
+echo "secret-data" | mkcreds \
+    --tpm2-pcrs=7+15 \
+    --not-after=+7d \
+    - mycred.cred
+
+# Expire at specific Unix timestamp
+mkcreds --tpm2-pcrs=7+15 --not-after=1735689600 - mycred.cred
+```
+
+### Override credential name
+
+```bash
+# Explicit name (otherwise derived from output filename)
+echo "secret" | mkcreds --name=myservice --tpm2-pcrs=7+15 - mycred.cred
 ```
 
 ### Print policy hash only
@@ -85,15 +117,28 @@ echo "secret-data" | mkcreds \
 Useful for verifying your PCR policy calculation:
 
 ```bash
-mkcreds --name test --tpm2-pcrs="7+15:sha256=..." --print-policy
+mkcreds --tpm2-pcrs="7+15:sha256=..." --print-policy - -
 ```
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `--tpm2-pcrs=PCRS` | PCR values to seal against (required) |
+| `--name=NAME` | Credential name (default: output filename without .cred) |
+| `--tpm2-device=PATH` | TPM2 device path (default: `/dev/tpmrm0`) |
+| `--not-after=TIME` | Credential expiration (Unix timestamp, `+DURATION`, or `infinity`) |
+| `--print-policy` | Print policy hash without creating credential |
+| `-q, --quiet` | Suppress informational messages |
 
 ## PCR Specification Format
 
-- `7` or `7+15` - Use current value(s) from TPM
-- `7:sha256=abc123...` - Use specified value for PCR 7 (64 hex chars for SHA256)
-- `7+15:sha256=abc...` - PCR 7 current, PCR 15 with expected value
-- `7:sha256=xxx+15:sha256=yyy` - Both with expected values
+| Format | Description |
+|--------|-------------|
+| `7` or `7+15` | Use current value(s) from TPM |
+| `7:sha256=abc123...` | Use specified value for PCR 7 |
+| `7+15:sha256=abc...` | PCR 7 current, PCR 15 with expected value |
+| `7:sha256=xxx+15:sha256=yyy` | Both with expected values |
 
 ## Motivation
 

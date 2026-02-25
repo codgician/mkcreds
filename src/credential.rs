@@ -81,7 +81,6 @@ impl CredentialBuilder {
     }
 
     /// Set expiration timestamp (microseconds since epoch)
-    #[allow(dead_code)]
     pub fn not_after(mut self, not_after: u64) -> Self {
         self.not_after = not_after;
         self

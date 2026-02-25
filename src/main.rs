@@ -2,6 +2,7 @@ mod credential;
 mod tpm;
 
 use std::io::{self, Read, Write};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -16,21 +17,27 @@ use crate::tpm::{ExpectedPcrValue, Tpm2Sealer};
 /// This tool allows sealing credentials against EXPECTED PCR values (not current),
 /// enabling offline enrollment for anti-replay protection scenarios.
 ///
+/// Usage is compatible with systemd-creds encrypt:
+///   mkcreds [OPTIONS] --tpm2-pcrs=PCRS INPUT OUTPUT
+///   mkcreds [OPTIONS] --tpm2-pcrs=PCRS INPUT -      # output to stdout
+///   mkcreds [OPTIONS] --tpm2-pcrs=PCRS - OUTPUT    # input from stdin
+///
 /// Examples:
 ///   # Use current PCR 7 and 15 values
-///   echo "secret" | mkcreds --name mycred --tpm2-pcrs=7+15
+///   echo "secret" | mkcreds --tpm2-pcrs=7+15 - mycred.cred
 ///
-///   # Use current PCR 7, but expected value for PCR 15
-///   echo "secret" | mkcreds --name mycred --tpm2-pcrs="7+15:sha256=abc123..."
+///   # Use expected value for PCR 15 (mkcreds extension)
+///   echo "secret" | mkcreds --tpm2-pcrs="7+15:sha256=abc123..." - mycred.cred
 ///
 /// The credential can be decrypted with:
 ///   systemd-creds decrypt mycred.cred -
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Credential name (embedded in encrypted payload, used for validation on decrypt)
+    /// Credential name (embedded in encrypted payload, used for validation on decrypt).
+    /// If not specified, defaults to the output filename (without path and .cred extension).
     #[arg(short, long)]
-    name: String,
+    name: Option<String>,
 
     /// PCR values to seal against (systemd-creds compatible syntax).
     ///
@@ -49,12 +56,20 @@ struct Args {
     #[arg(long = "tpm2-device", default_value = "device:/dev/tpmrm0")]
     tpm2_device: String,
 
-    /// Read secret from file instead of stdin ("-" for stdin)
+    /// Include specified invalidation time in encrypted credential.
+    /// Accepts timestamps in various formats (systemd-compatible):
+    ///   - Unix timestamp in seconds or microseconds
+    ///   - ISO 8601 format: 2024-12-31T23:59:59
+    ///   - Relative: +5min, +1h, +7d
+    #[arg(long = "not-after", value_name = "TIME")]
+    not_after: Option<String>,
+
+    /// Input file ("-" for stdin)
     #[arg(default_value = "-")]
     input: String,
 
-    /// Write credential to file instead of stdout ("-" for stdout)
-    #[arg(short, long, default_value = "-")]
+    /// Output file ("-" for stdout)
+    #[arg(default_value = "-")]
     output: String,
 
     /// Print the expected policy hash (hex) without creating a credential
@@ -98,9 +113,24 @@ fn main() -> Result<()> {
         anyhow::bail!("Secret cannot be empty");
     }
 
+    // Derive credential name: explicit --name, or from output filename, or empty
+    let cred_name = args.name.unwrap_or_else(|| derive_name_from_output(&args.output));
+
+    // Parse not-after timestamp if provided
+    let not_after = match &args.not_after {
+        Some(s) => Some(parse_timestamp(s)?),
+        None => None,
+    };
+
     // Build systemd-creds compatible credential
-    let credential = CredentialBuilder::new()
-        .name(&args.name)
+    let mut builder = CredentialBuilder::new();
+    if !cred_name.is_empty() {
+        builder = builder.name(&cred_name);
+    }
+    if let Some(ts) = not_after {
+        builder = builder.not_after(ts);
+    }
+    let credential = builder
         .build(&secret, &tpm2_data)
         .context("Failed to build credential")?;
 
@@ -111,7 +141,7 @@ fn main() -> Result<()> {
         io::stdout().write_all(encoded.as_bytes())?;
         io::stdout().write_all(b"\n")?;
     } else {
-        std::fs::write(&args.output, &encoded)
+        std::fs::write(&args.output, format!("{}\n", encoded))
             .with_context(|| format!("Failed to write to {}", args.output))?;
         if !args.quiet {
             eprintln!("Credential written to {}", args.output);
@@ -119,6 +149,81 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Derive credential name from output filename.
+/// Strips path and .cred extension if present.
+fn derive_name_from_output(output: &str) -> String {
+    if output == "-" {
+        return String::new();
+    }
+    
+    let path = Path::new(output);
+    let filename = path.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    
+    // Strip .cred extension if present
+    filename.strip_suffix(".cred").unwrap_or(filename).to_string()
+}
+
+/// Parse timestamp string into microseconds since epoch.
+/// Supports:
+///   - Unix timestamp (seconds or microseconds)
+///   - Relative: +5min, +1h, +7d
+///   - "infinity" or "never" for no expiration
+fn parse_timestamp(s: &str) -> Result<u64> {
+    let s = s.trim();
+    
+    // Handle special values
+    if s == "infinity" || s == "never" {
+        return Ok(u64::MAX);
+    }
+    
+    // Handle relative timestamps
+    if let Some(rest) = s.strip_prefix('+') {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+        let duration = parse_duration(rest)?;
+        return Ok(now.saturating_add(duration));
+    }
+    
+    // Try parsing as numeric timestamp
+    if let Ok(ts) = s.parse::<u64>() {
+        // If it looks like seconds (< year 3000 in seconds), convert to microseconds
+        if ts < 32503680000 {
+            return Ok(ts.saturating_mul(1_000_000));
+        }
+        // Otherwise assume it's already in microseconds
+        return Ok(ts);
+    }
+    
+    anyhow::bail!("Invalid timestamp format: {}. Use Unix timestamp, +DURATION, or 'infinity'", s)
+}
+
+/// Parse duration string like "5min", "1h", "7d" into microseconds.
+fn parse_duration(s: &str) -> Result<u64> {
+    let s = s.trim();
+    
+    // Find where the number ends and unit begins
+    let num_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (num_str, unit) = s.split_at(num_end);
+    
+    let num: u64 = num_str.parse()
+        .with_context(|| format!("Invalid duration number: {}", num_str))?;
+    
+    let multiplier: u64 = match unit.trim().to_lowercase().as_str() {
+        "" | "s" | "sec" | "second" | "seconds" => 1_000_000,
+        "m" | "min" | "minute" | "minutes" => 60 * 1_000_000,
+        "h" | "hr" | "hour" | "hours" => 3600 * 1_000_000,
+        "d" | "day" | "days" => 86400 * 1_000_000,
+        "w" | "week" | "weeks" => 7 * 86400 * 1_000_000,
+        other => anyhow::bail!("Unknown duration unit: {}", other),
+    };
+    
+    Ok(num.saturating_mul(multiplier))
 }
 
 /// Parse systemd-creds compatible PCR specification.

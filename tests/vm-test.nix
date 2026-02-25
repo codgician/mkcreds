@@ -59,7 +59,7 @@ pkgs.testers.runNixOSTest {
         machine.log(f"Expected PCR 15 after extend: {expected_pcr15}")
 
         # Step 5: Create credential bound to the EXPECTED (future) PCR 15 value
-        machine.succeed(f"echo -n 'my-secret-password' | mkcreds --name testcred --tpm2-pcrs='15:sha256={expected_pcr15}' -o /tmp/testcred.cred")
+        machine.succeed(f"echo -n 'my-secret-password' | mkcreds --tpm2-pcrs='15:sha256={expected_pcr15}' - /tmp/testcred.cred")
         machine.succeed("test -s /tmp/testcred.cred")
         machine.log("Credential created successfully")
 
