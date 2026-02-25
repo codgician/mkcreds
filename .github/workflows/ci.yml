@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+
+      - name: Check formatting
+        run: nix develop --command cargo fmt --check
+
+      - name: Run clippy
+        run: nix develop --command cargo clippy -- -D warnings
+
+      - name: Build
+        run: nix build
+
+  build-matrix:
+    name: Build (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+
+      - name: Build for ${{ matrix.system }}
+        run: nix build .#packages.${{ matrix.system }}.default
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mkcreds-${{ matrix.system }}
+          path: result/bin/mkcreds

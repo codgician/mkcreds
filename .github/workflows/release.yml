@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.system }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+            artifact: mkcreds-x86_64-linux
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            artifact: mkcreds-aarch64-linux
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+
+      - name: Build for ${{ matrix.system }}
+        run: nix build .#packages.${{ matrix.system }}.default
+
+      - name: Prepare artifact
+        run: |
+          cp result/bin/mkcreds ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            artifact=$(basename "$dir")
+            cp "$dir/$artifact" "release/$artifact"
+            chmod +x "release/$artifact"
+          done
+          cd release
+          for file in *; do
+            sha256sum "$file" > "$file.sha256"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/mkcreds-x86_64-linux
+            release/mkcreds-x86_64-linux.sha256
+            release/mkcreds-aarch64-linux
+            release/mkcreds-aarch64-linux.sha256
