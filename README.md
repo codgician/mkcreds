@@ -1,14 +1,17 @@
 # mkcreds
 
+[![Build](https://github.com/codgician/mkcreds/actions/workflows/build.yml/badge.svg)](https://github.com/codgician/mkcreds/actions/workflows/build.yml)
+[![License: LGPL-2.1](https://img.shields.io/badge/License-LGPL--2.1-blue.svg)](https://opensource.org/licenses/LGPL-2.1)
+
 Create systemd-creds compatible TPM2-sealed credentials with **expected PCR values**.
 
 This addresses [systemd/systemd#38763](https://github.com/systemd/systemd/issues/38763) — `systemd-creds encrypt` cannot seal against future PCR states, only current ones.
 
-## Installation
+## Quick Start
 
 ```bash
-nix build github:codgician/mkcreds
-# Or: cargo build --release (requires tpm2-tss and pkg-config)
+# Run directly with Nix (no installation needed)
+nix run github:codgician/mkcreds -- --tpm2-pcrs=7+15 - mycred.cred
 ```
 
 ## Usage
