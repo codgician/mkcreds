@@ -1,0 +1,34 @@
+[package]
+name = "mkcreds"
+version = "0.1.0"
+edition = "2024"
+description = "Create systemd-creds compatible TPM2-sealed credentials with custom PCR values"
+license = "LGPL-2.1"
+authors = ["codgician"]
+
+[dependencies]
+# TPM2 bindings
+tss-esapi = "7"
+
+# Cryptography
+aes-gcm = "0.10"
+sha2 = "0.10"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+hex = "0.4"
+base64 = "0.22"
+
+# Error handling
+anyhow = "1"
+
+# Misc
+byteorder = "1"
+rand = "0.8"
+zeroize = "1"
+
+[profile.release]
+lto = true
+strip = true
