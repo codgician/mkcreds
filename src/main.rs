@@ -114,7 +114,9 @@ fn main() -> Result<()> {
     }
 
     // Derive credential name: explicit --name, or from output filename, or empty
-    let cred_name = args.name.unwrap_or_else(|| derive_name_from_output(&args.output));
+    let cred_name = args
+        .name
+        .unwrap_or_else(|| derive_name_from_output(&args.output));
 
     // Parse not-after timestamp if provided
     let not_after = match &args.not_after {
@@ -157,14 +159,15 @@ fn derive_name_from_output(output: &str) -> String {
     if output == "-" {
         return String::new();
     }
-    
+
     let path = Path::new(output);
-    let filename = path.file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    
+    let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
     // Strip .cred extension if present
-    filename.strip_suffix(".cred").unwrap_or(filename).to_string()
+    filename
+        .strip_suffix(".cred")
+        .unwrap_or(filename)
+        .to_string()
 }
 
 /// Parse timestamp string into microseconds since epoch.
@@ -174,12 +177,12 @@ fn derive_name_from_output(output: &str) -> String {
 ///   - "infinity" or "never" for no expiration
 fn parse_timestamp(s: &str) -> Result<u64> {
     let s = s.trim();
-    
+
     // Handle special values
     if s == "infinity" || s == "never" {
         return Ok(u64::MAX);
     }
-    
+
     // Handle relative timestamps
     if let Some(rest) = s.strip_prefix('+') {
         let now = std::time::SystemTime::now()
@@ -189,7 +192,7 @@ fn parse_timestamp(s: &str) -> Result<u64> {
         let duration = parse_duration(rest)?;
         return Ok(now.saturating_add(duration));
     }
-    
+
     // Try parsing as numeric timestamp
     if let Ok(ts) = s.parse::<u64>() {
         // If it looks like seconds (< year 3000 in seconds), convert to microseconds
@@ -199,21 +202,25 @@ fn parse_timestamp(s: &str) -> Result<u64> {
         // Otherwise assume it's already in microseconds
         return Ok(ts);
     }
-    
-    anyhow::bail!("Invalid timestamp format: {}. Use Unix timestamp, +DURATION, or 'infinity'", s)
+
+    anyhow::bail!(
+        "Invalid timestamp format: {}. Use Unix timestamp, +DURATION, or 'infinity'",
+        s
+    )
 }
 
 /// Parse duration string like "5min", "1h", "7d" into microseconds.
 fn parse_duration(s: &str) -> Result<u64> {
     let s = s.trim();
-    
+
     // Find where the number ends and unit begins
     let num_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
     let (num_str, unit) = s.split_at(num_end);
-    
-    let num: u64 = num_str.parse()
+
+    let num: u64 = num_str
+        .parse()
         .with_context(|| format!("Invalid duration number: {}", num_str))?;
-    
+
     let multiplier: u64 = match unit.trim().to_lowercase().as_str() {
         "" | "s" | "sec" | "second" | "seconds" => 1_000_000,
         "m" | "min" | "minute" | "minutes" => 60 * 1_000_000,
@@ -222,7 +229,7 @@ fn parse_duration(s: &str) -> Result<u64> {
         "w" | "week" | "weeks" => 7 * 86400 * 1_000_000,
         other => anyhow::bail!("Unknown duration unit: {}", other),
     };
-    
+
     Ok(num.saturating_mul(multiplier))
 }
 

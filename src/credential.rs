@@ -14,10 +14,10 @@
 //! - This is what systemd calls "sha256_hash_host_and_tpm2_key" (with host_key empty)
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use byteorder::{LittleEndian, WriteBytesExt};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -26,8 +26,7 @@ use zeroize::Zeroizing;
 
 /// systemd credential type IDs
 const CRED_AES256_GCM_BY_TPM2_HMAC: [u8; 16] = [
-    0x0c, 0x7c, 0xc0, 0x7b, 0x11, 0x76, 0x45, 0x91,
-    0x9c, 0x4b, 0x0b, 0xea, 0x08, 0xbc, 0x20, 0xfe,
+    0x0c, 0x7c, 0xc0, 0x7b, 0x11, 0x76, 0x45, 0x91, 0x9c, 0x4b, 0x0b, 0xea, 0x08, 0xbc, 0x20, 0xfe,
 ];
 
 /// Maximum credential size (1MB)
@@ -35,9 +34,9 @@ const CREDENTIAL_SIZE_MAX: usize = 1024 * 1024;
 
 /// AES-256-GCM parameters
 const AES_KEY_SIZE: usize = 32;
-const AES_IV_SIZE: usize = 12;  // GCM standard nonce size (systemd stores 16 but uses 12)
+const AES_IV_SIZE: usize = 12; // GCM standard nonce size (systemd stores 16 but uses 12)
 const AES_TAG_SIZE: usize = 16;
-const AES_BLOCK_SIZE: usize = 1;  // AES-GCM is stream mode, block size = 1 (NOT 16!)
+const AES_BLOCK_SIZE: usize = 1; // AES-GCM is stream mode, block size = 1 (NOT 16!)
 
 /// Sealed TPM2 data for credential
 pub struct Tpm2SealedData {
@@ -121,10 +120,13 @@ impl CredentialBuilder {
         let nonce = Nonce::from_slice(&iv[..12]);
 
         let ciphertext = cipher
-            .encrypt(nonce, aes_gcm::aead::Payload {
-                msg: &plaintext,
-                aad: &aad,
-            })
+            .encrypt(
+                nonce,
+                aes_gcm::aead::Payload {
+                    msg: &plaintext,
+                    aad: &aad,
+                },
+            )
             .map_err(|e| anyhow!("Encryption failed: {}", e))?;
 
         // Build final output
@@ -170,7 +172,7 @@ impl CredentialBuilder {
         tpm2_hdr.write_u16::<LittleEndian>(tpm2.primary_alg)?;
         tpm2_hdr.write_u32::<LittleEndian>(tpm2.blob.len() as u32)?;
         tpm2_hdr.write_u32::<LittleEndian>(tpm2.policy_hash.len() as u32)?;
-        tpm2_hdr.extend_from_slice(&tpm2.blob);        // BLOB FIRST
+        tpm2_hdr.extend_from_slice(&tpm2.blob); // BLOB FIRST
         tpm2_hdr.extend_from_slice(&tpm2.policy_hash); // POLICY_HASH SECOND
         // Pad to 8-byte boundary
         while tpm2_hdr.len() % 8 != 0 {

@@ -30,6 +30,7 @@ cargo clippy -- -D warnings    # Lints as errors
 Rust CLI tool (Edition 2024) that creates systemd-creds compatible TPM2-sealed credentials with **custom PCR values**. Solves limitation where `systemd-creds encrypt` cannot seal against expected (future) PCR values.
 
 **Key files:**
+
 - `src/main.rs` - CLI entry point, argument parsing
 - `src/credential.rs` - systemd-creds compatible credential format builder
 - `src/tpm.rs` - TPM2 operations: policy calculation and sealing
@@ -38,17 +39,20 @@ Rust CLI tool (Edition 2024) that creates systemd-creds compatible TPM2-sealed c
 ## Boundaries
 
 ### ✅ Always
+
 - Use `anyhow::Result<T>` with `.context()` for error handling
 - Use `Zeroizing<T>` for secrets and key material
 - Run `cargo clippy` before commits
 - Test format changes with VM test - unit tests can't validate systemd compatibility
 
 ### ⚠️ Ask First
+
 - Adding new dependencies
 - Modifying credential format (must match systemd exactly)
 - Changing TPM2 blob marshalling order
 
 ### 🚫 Never
+
 - Use `.unwrap()` in library code - use `?` operator
 - Log secrets or key material
 - Suppress type errors with `as any`, `@ts-ignore`
@@ -59,11 +63,13 @@ Rust CLI tool (Edition 2024) that creates systemd-creds compatible TPM2-sealed c
 This tool must produce credentials that `systemd-creds decrypt` can read.
 
 **TPM2 blob order** (`tpm.rs:marshal_sealed_blob`):
+
 1. TPM2B_PRIVATE (size BE + data) — **PRIVATE FIRST**
 2. TPM2B_PUBLIC (size BE + marshalled data)
 3. TPM2B_ENCRYPTED_SECRET (size BE, typically 0)
 
 **tpm2_credential_header order** (`credential.rs:build_headers`):
+
 - blob FIRST, policy_hash SECOND in `policy_hash_and_blob[]`
 
 **AES-256-GCM params**: `block_size=1` (GCM stream mode), `iv_size=12`, `tag_size=16`
@@ -73,6 +79,7 @@ This tool must produce credentials that `systemd-creds decrypt` can read.
 ## Code Style
 
 ### Imports
+
 Group in order, separated by blank lines: std → external crates (alphabetical) → crate-internal
 
 ```rust
@@ -85,6 +92,7 @@ use crate::credential::CredentialBuilder;
 ```
 
 ### Error Handling
+
 ```rust
 // Good - contextual errors
 let sealer = Tpm2Sealer::new(&args.tpm2_device)
@@ -97,35 +105,39 @@ if pcr_values.is_empty() {
 ```
 
 ### Naming
+
 - Functions/methods: `snake_case`
 - Types/structs/enums: `PascalCase`
 - Constants: `SCREAMING_SNAKE_CASE`
 
 ### Patterns
+
 - Builder pattern for complex construction (see `CredentialBuilder`)
 - Implement `Default` when sensible
 - Doc comments (`///`) for public items, module docs (`//!`) at file top
 
 ## Dependencies
 
-| Crate | Purpose |
-|-------|---------|
-| `tss-esapi` | TPM2 bindings |
-| `aes-gcm` | AES-256-GCM encryption |
-| `sha2` | SHA256 hashing |
-| `clap` | CLI argument parsing (derive) |
-| `anyhow` | Error handling |
-| `zeroize` | Secure memory clearing |
+| Crate       | Purpose                       |
+| ----------- | ----------------------------- |
+| `tss-esapi` | TPM2 bindings                 |
+| `aes-gcm`   | AES-256-GCM encryption        |
+| `sha2`      | SHA256 hashing                |
+| `clap`      | CLI argument parsing (derive) |
+| `anyhow`    | Error handling                |
+| `zeroize`   | Secure memory clearing        |
 
 ## Environment Setup
 
 ### With Nix (recommended)
+
 ```bash
 nix develop        # Enter dev shell
 direnv allow       # Or use direnv
 ```
 
 ### Without Nix
+
 Requires: Rust toolchain, `tpm2-tss` dev libs, `pkg-config`, `openssl` dev libs
 
 ```bash
@@ -136,12 +148,14 @@ export TSS2_ESYS_2_3=1
 ## Debugging
 
 **Credential decryption fails:**
+
 1. Check blob order (PRIVATE first)
 2. Check header order (blob before policy_hash)
 3. Verify AES params (block_size=1, iv_size=12)
 4. Use `--name=X` on decrypt if name mismatch
 
 **Policy mismatch:**
+
 1. Use `--print-policy` to see computed hash
 2. PCR values must be sorted by index
 3. Check PCR selection bytes format

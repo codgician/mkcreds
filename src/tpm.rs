@@ -1,9 +1,10 @@
 //! TPM2 operations: policy calculation and sealing with expected PCR values.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use tss_esapi::{
+    Context as TpmContext,
     attributes::ObjectAttributesBuilder,
     constants::SessionType,
     handles::KeyHandle,
@@ -12,13 +13,12 @@ use tss_esapi::{
         resource_handles::Hierarchy,
     },
     structures::{
-        CreatePrimaryKeyResult, Digest as TpmDigest, PcrSelectionListBuilder,
-        PcrSlot, Public, PublicBuilder, PublicEccParametersBuilder, SymmetricDefinition,
-        SymmetricDefinitionObject, SensitiveData, CreateKeyResult,
+        CreateKeyResult, CreatePrimaryKeyResult, Digest as TpmDigest, PcrSelectionListBuilder,
+        PcrSlot, Public, PublicBuilder, PublicEccParametersBuilder, SensitiveData,
+        SymmetricDefinition, SymmetricDefinitionObject,
     },
     tcti_ldr::TctiNameConf,
     traits::Marshall,
-    Context as TpmContext,
 };
 use zeroize::Zeroizing;
 
@@ -77,8 +77,8 @@ impl ExpectedPcrValue {
             other => return Err(anyhow!("Unsupported hash algorithm: {}", other)),
         };
 
-        let value =
-            hex::decode(alg_value[1]).with_context(|| format!("Invalid hex value: {}", alg_value[1]))?;
+        let value = hex::decode(alg_value[1])
+            .with_context(|| format!("Invalid hex value: {}", alg_value[1]))?;
 
         Ok(Self {
             index,
@@ -107,10 +107,13 @@ impl Tpm2Sealer {
 
     /// Seal a random key with expected PCR values.
     /// Returns Tpm2SealedData containing everything needed for the credential.
-    pub fn seal_with_expected_pcrs(&mut self, pcr_values: &[ExpectedPcrValue]) -> Result<Tpm2SealedData> {
+    pub fn seal_with_expected_pcrs(
+        &mut self,
+        pcr_values: &[ExpectedPcrValue],
+    ) -> Result<Tpm2SealedData> {
         // Generate random key to seal
         let mut sealed_secret = Zeroizing::new(vec![0u8; SEALED_KEY_SIZE]);
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut *sealed_secret);
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut sealed_secret);
 
         // Resolve any PCR values that need to be read from TPM
         let resolved_values = self.resolve_pcr_values(pcr_values)?;
@@ -127,7 +130,8 @@ impl Tpm2Sealer {
             self.create_sealed_object(primary_handle, &sealed_secret, &policy_hash)?;
 
         // Serialize the sealed blob
-        let blob = self.marshal_sealed_blob(&create_result.out_public, &create_result.out_private)?;
+        let blob =
+            self.marshal_sealed_blob(&create_result.out_public, &create_result.out_private)?;
 
         // Calculate PCR mask
         let pcr_mask = resolved_values
@@ -144,7 +148,10 @@ impl Tpm2Sealer {
     }
 
     /// Resolve PCR values - read current values for any that weren't specified
-    fn resolve_pcr_values(&mut self, pcr_values: &[ExpectedPcrValue]) -> Result<Vec<(u32, Vec<u8>)>> {
+    fn resolve_pcr_values(
+        &mut self,
+        pcr_values: &[ExpectedPcrValue],
+    ) -> Result<Vec<(u32, Vec<u8>)>> {
         let mut resolved = Vec::new();
 
         for pv in pcr_values {
@@ -173,7 +180,10 @@ impl Tpm2Sealer {
             .build()
             .context("Failed to build PCR selection")?;
 
-        let (_, _, digests) = self.context.pcr_read(selection).context("Failed to read PCR")?;
+        let (_, _, digests) = self
+            .context
+            .pcr_read(selection)
+            .context("Failed to read PCR")?;
 
         let digest_list: Vec<_> = digests.value().to_vec();
         if digest_list.is_empty() {
@@ -209,10 +219,10 @@ impl Tpm2Sealer {
 
         // Extend policy: H(policy || TPM_CC_PolicyPCR || pcr_selection || pcr_digest)
         let mut policy_hasher = Sha256::new();
-        policy_hasher.update(&policy);
-        policy_hasher.update(&0x0000017Fu32.to_be_bytes());
+        policy_hasher.update(policy);
+        policy_hasher.update(0x0000017Fu32.to_be_bytes());
         policy_hasher.update(&pcr_selection);
-        policy_hasher.update(&pcr_digest);
+        policy_hasher.update(pcr_digest);
         policy = policy_hasher.finalize().into();
 
         Ok(policy.to_vec())
@@ -323,8 +333,8 @@ impl Tpm2Sealer {
             .build()
             .context("Failed to build sealed object attributes")?;
 
-        let policy =
-            TpmDigest::try_from(policy_digest.to_vec()).context("Failed to create policy digest")?;
+        let policy = TpmDigest::try_from(policy_digest.to_vec())
+            .context("Failed to create policy digest")?;
 
         let public = PublicBuilder::new()
             .with_public_algorithm(PublicAlgorithm::KeyedHash)

@@ -32,14 +32,14 @@ systemd-creds decrypt mycred.cred -
 
 ## Options
 
-| Option | Description |
-|--------|-------------|
-| `--tpm2-pcrs=PCRS` | PCRs to seal against (required) |
-| `--name=NAME` | Credential name (default: output filename) |
-| `--not-after=TIME` | Expiration (`+1h`, `+7d`, Unix timestamp, `infinity`) |
-| `--tpm2-device=PATH` | TPM device (default: `/dev/tpmrm0`) |
-| `--print-policy` | Print policy hash only |
-| `-q, --quiet` | Suppress messages |
+| Option               | Description                                           |
+| -------------------- | ----------------------------------------------------- |
+| `--tpm2-pcrs=PCRS`   | PCRs to seal against (required)                       |
+| `--name=NAME`        | Credential name (default: output filename)            |
+| `--not-after=TIME`   | Expiration (`+1h`, `+7d`, Unix timestamp, `infinity`) |
+| `--tpm2-device=PATH` | TPM device (default: `/dev/tpmrm0`)                   |
+| `--print-policy`     | Print policy hash only                                |
+| `-q, --quiet`        | Suppress messages                                     |
 
 ## PCR Format
 
