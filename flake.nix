@@ -3,15 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    crane = {
-      url = "github:ipetkov/crane";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    crane.url = "github:ipetkov/crane";
     treefmt-nix = {
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -22,111 +18,123 @@
     {
       self,
       nixpkgs,
-      flake-utils,
       rust-overlay,
       crane,
       treefmt-nix,
     }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        overlays = [ (import rust-overlay) ];
-        pkgs = import nixpkgs { inherit system overlays; };
+    let
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [
-            "rustfmt"
-            "clippy"
+      # Per-system helper that computes all shared values once
+      mkSystem =
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (import rust-overlay) ];
+          };
+
+          rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+            extensions = [
+              "rustfmt"
+              "clippy"
+            ];
+          };
+
+          craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+
+          treefmtEval = treefmt-nix.lib.evalModule pkgs {
+            projectRootFile = "flake.nix";
+            programs.rustfmt.enable = true;
+            programs.yamlfmt.enable = true;
+            programs.prettier.enable = true;
+            programs.nixfmt.enable = true;
+          };
+
+          buildInputs = with pkgs; [
+            tpm2-tss
+            openssl
           ];
-        };
-        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        # Treefmt configuration
-        treefmtEval = treefmt-nix.lib.evalModule pkgs {
-          projectRootFile = "flake.nix";
-          programs.rustfmt.enable = true;
-          programs.yamlfmt.enable = true;
-          programs.prettier.enable = true; # For markdown
-          programs.nixfmt.enable = true;
-        };
-        # Common build inputs for TPM2
-        buildInputs = with pkgs; [
-          tpm2-tss
-          openssl
-        ];
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            rustToolchain
+          ];
 
-        nativeBuildInputs = with pkgs; [
-          pkg-config
-          rustToolchain
-        ];
+          commonArgs = {
+            src = craneLib.cleanCargoSource ./.;
+            strictDeps = true;
+            inherit buildInputs nativeBuildInputs;
+            OPENSSL_NO_VENDOR = "1";
+            TSS2_ESYS_2_3 = "1";
+          };
 
-        # Common args for all crane builds
-        commonArgs = {
-          src = craneLib.cleanCargoSource ./.;
-          strictDeps = true;
-          inherit buildInputs nativeBuildInputs;
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-          # tss-esapi needs these at build time
-          OPENSSL_NO_VENDOR = "1";
-          TSS2_ESYS_2_3 = "1";
-        };
-
-        # Build dependencies only (for caching)
-        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-        # Build the crate
-        mkcreds = craneLib.buildPackage (
-          commonArgs
-          // {
-            inherit cargoArtifacts;
-          }
-        );
-      in
-      {
-        packages = {
-          default = mkcreds;
-          mkcreds = mkcreds;
-        };
-
-        # Checks run by `nix flake check`
-        checks = {
-          # Build the package
-          inherit mkcreds;
-
-          # Format check (all file types)
-          formatting = treefmtEval.config.build.check self;
-
-          # Clippy lints
-          clippy = craneLib.cargoClippy (
+          mkcreds = craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; });
+        in
+        {
+          inherit
+            pkgs
+            craneLib
+            treefmtEval
+            buildInputs
             commonArgs
+            cargoArtifacts
+            mkcreds
+            ;
+        };
+
+      # Memoized per-system values
+      systemFor = forAllSystems mkSystem;
+    in
+    {
+      packages = forAllSystems (system: {
+        default = systemFor.${system}.mkcreds;
+      });
+
+      checks = forAllSystems (
+        system:
+        let
+          s = systemFor.${system};
+        in
+        {
+          formatting = s.treefmtEval.config.build.check self;
+          clippy = s.craneLib.cargoClippy (
+            s.commonArgs
             // {
-              inherit cargoArtifacts;
+              inherit (s) cargoArtifacts;
               cargoClippyExtraArgs = "-- -D warnings";
             }
           );
         }
-        //
-          pkgs.lib.optionalAttrs pkgs.stdenv.isLinux
-            # VM tests (Linux only)
-            (import ./tests { inherit pkgs mkcreds; });
+        // import ./tests { inherit (s) pkgs mkcreds; }
+      );
 
-        # Formatter for `nix fmt`
-        formatter = treefmtEval.config.build.wrapper;
+      formatter = forAllSystems (system: systemFor.${system}.treefmtEval.config.build.wrapper);
 
-        devShells.default = craneLib.devShell {
-          inherit buildInputs;
-          nativeBuildInputs = nativeBuildInputs;
-          packages = with pkgs; [
-            rust-analyzer
-            cargo-watch
-            tpm2-tools # For testing
-            pkg-config
-            treefmtEval.config.build.wrapper # treefmt
-          ];
-
-          OPENSSL_NO_VENDOR = "1";
-          TSS2_ESYS_2_3 = "1";
-        };
-      }
-    );
+      devShells = forAllSystems (
+        system:
+        let
+          s = systemFor.${system};
+        in
+        {
+          default = s.craneLib.devShell {
+            inherit (s) buildInputs;
+            packages = [
+              s.pkgs.rust-analyzer
+              s.pkgs.cargo-watch
+              s.pkgs.tpm2-tools
+              s.treefmtEval.config.build.wrapper
+            ];
+            OPENSSL_NO_VENDOR = "1";
+            TSS2_ESYS_2_3 = "1";
+          };
+        }
+      );
+    };
 }
