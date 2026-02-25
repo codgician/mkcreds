@@ -75,10 +75,6 @@ struct Args {
     /// Print the expected policy hash (hex) without creating a credential
     #[arg(long)]
     print_policy: bool,
-
-    /// Suppress informational messages
-    #[arg(short, long)]
-    quiet: bool,
 }
 
 fn main() -> Result<()> {
@@ -107,7 +103,7 @@ fn main() -> Result<()> {
     }
 
     // Read secret from stdin or file
-    let secret = read_secret(&args.input, args.quiet)?;
+    let secret = read_secret(&args.input)?;
 
     if secret.is_empty() {
         anyhow::bail!("Secret cannot be empty");
@@ -145,9 +141,7 @@ fn main() -> Result<()> {
     } else {
         std::fs::write(&args.output, format!("{}\n", encoded))
             .with_context(|| format!("Failed to write to {}", args.output))?;
-        if !args.quiet {
-            eprintln!("Credential written to {}", args.output);
-        }
+        eprintln!("Credential written to {}", args.output);
     }
 
     Ok(())
@@ -247,11 +241,9 @@ fn parse_tpm2_pcrs(spec: &str) -> Result<Vec<ExpectedPcrValue>> {
         .collect()
 }
 
-fn read_secret(path: &str, quiet: bool) -> Result<Zeroizing<Vec<u8>>> {
+fn read_secret(path: &str) -> Result<Zeroizing<Vec<u8>>> {
     let data = if path == "-" {
-        if !quiet {
-            eprintln!("Reading secret from stdin...");
-        }
+        eprintln!("Reading secret from stdin...");
         let mut buf = Vec::new();
         io::stdin()
             .read_to_end(&mut buf)
@@ -261,4 +253,125 @@ fn read_secret(path: &str, quiet: bool) -> Result<Zeroizing<Vec<u8>>> {
         std::fs::read(path).with_context(|| format!("Failed to read secret from {}", path))?
     };
     Ok(Zeroizing::new(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration_seconds() {
+        assert_eq!(parse_duration("5").unwrap(), 5_000_000);
+        assert_eq!(parse_duration("5s").unwrap(), 5_000_000);
+        assert_eq!(parse_duration("5sec").unwrap(), 5_000_000);
+        assert_eq!(parse_duration("5second").unwrap(), 5_000_000);
+        assert_eq!(parse_duration("5seconds").unwrap(), 5_000_000);
+    }
+
+    #[test]
+    fn test_parse_duration_minutes() {
+        assert_eq!(parse_duration("5m").unwrap(), 5 * 60 * 1_000_000);
+        assert_eq!(parse_duration("5min").unwrap(), 5 * 60 * 1_000_000);
+        assert_eq!(parse_duration("5minute").unwrap(), 5 * 60 * 1_000_000);
+        assert_eq!(parse_duration("5minutes").unwrap(), 5 * 60 * 1_000_000);
+    }
+
+    #[test]
+    fn test_parse_duration_hours() {
+        assert_eq!(parse_duration("2h").unwrap(), 2 * 3600 * 1_000_000);
+        assert_eq!(parse_duration("2hr").unwrap(), 2 * 3600 * 1_000_000);
+        assert_eq!(parse_duration("2hour").unwrap(), 2 * 3600 * 1_000_000);
+        assert_eq!(parse_duration("2hours").unwrap(), 2 * 3600 * 1_000_000);
+    }
+
+    #[test]
+    fn test_parse_duration_days() {
+        assert_eq!(parse_duration("7d").unwrap(), 7 * 86400 * 1_000_000);
+        assert_eq!(parse_duration("7day").unwrap(), 7 * 86400 * 1_000_000);
+        assert_eq!(parse_duration("7days").unwrap(), 7 * 86400 * 1_000_000);
+    }
+
+    #[test]
+    fn test_parse_duration_weeks() {
+        assert_eq!(parse_duration("2w").unwrap(), 2 * 7 * 86400 * 1_000_000);
+        assert_eq!(parse_duration("2week").unwrap(), 2 * 7 * 86400 * 1_000_000);
+        assert_eq!(parse_duration("2weeks").unwrap(), 2 * 7 * 86400 * 1_000_000);
+    }
+
+    #[test]
+    fn test_parse_duration_case_insensitive() {
+        assert_eq!(parse_duration("5MIN").unwrap(), 5 * 60 * 1_000_000);
+        assert_eq!(parse_duration("5Min").unwrap(), 5 * 60 * 1_000_000);
+        assert_eq!(parse_duration("2HOURS").unwrap(), 2 * 3600 * 1_000_000);
+    }
+
+    #[test]
+    fn test_parse_duration_with_whitespace() {
+        assert_eq!(parse_duration("  5min  ").unwrap(), 5 * 60 * 1_000_000);
+        assert_eq!(parse_duration("5 min").unwrap(), 5 * 60 * 1_000_000);
+    }
+
+    #[test]
+    fn test_parse_duration_zero() {
+        assert_eq!(parse_duration("0").unwrap(), 0);
+        assert_eq!(parse_duration("0s").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("5xyz").is_err());
+        assert!(parse_duration("").is_err());
+    }
+
+    #[test]
+    fn test_parse_timestamp_infinity() {
+        assert_eq!(parse_timestamp("infinity").unwrap(), u64::MAX);
+        assert_eq!(parse_timestamp("never").unwrap(), u64::MAX);
+        assert_eq!(parse_timestamp("  infinity  ").unwrap(), u64::MAX);
+    }
+
+    #[test]
+    fn test_parse_timestamp_unix_seconds() {
+        // Unix timestamp in seconds (should be converted to microseconds)
+        assert_eq!(parse_timestamp("1000000000").unwrap(), 1000000000_000_000);
+        assert_eq!(parse_timestamp("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_parse_timestamp_unix_microseconds() {
+        // Large value that looks like microseconds (> year 3000 in seconds)
+        let ts_us = 33000000000_000_000u64; // ~year 3015 in microseconds
+        assert_eq!(parse_timestamp(&ts_us.to_string()).unwrap(), ts_us);
+    }
+
+    #[test]
+    fn test_parse_timestamp_relative() {
+        // Relative timestamps should be in the future
+        let result = parse_timestamp("+1h").unwrap();
+        let now_approx = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        
+        // Should be roughly 1 hour from now (with some tolerance)
+        let one_hour_us = 3600 * 1_000_000;
+        assert!(result > now_approx);
+        assert!(result < now_approx + one_hour_us + 1_000_000); // 1 sec tolerance
+    }
+
+    #[test]
+    fn test_parse_timestamp_invalid() {
+        assert!(parse_timestamp("not-a-timestamp").is_err());
+        assert!(parse_timestamp("abc123").is_err());
+    }
+
+    #[test]
+    fn test_derive_name_from_output() {
+        assert_eq!(derive_name_from_output("mycred.cred"), "mycred");
+        assert_eq!(derive_name_from_output("/path/to/mycred.cred"), "mycred");
+        assert_eq!(derive_name_from_output("mycred"), "mycred");
+        assert_eq!(derive_name_from_output("-"), "");
+        assert_eq!(derive_name_from_output("/path/to/secret"), "secret");
+    }
 }

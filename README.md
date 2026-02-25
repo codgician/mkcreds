@@ -42,7 +42,6 @@ systemd-creds decrypt mycred.cred -
 | `--not-after=TIME`   | Expiration (`+1h`, `+7d`, Unix timestamp, `infinity`) |
 | `--tpm2-device=PATH` | TPM device (default: `/dev/tpmrm0`)                   |
 | `--print-policy`     | Print policy hash only                                |
-| `-q, --quiet`        | Suppress messages                                     |
 
 ## PCR Format
 
