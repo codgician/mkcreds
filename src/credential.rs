@@ -80,7 +80,7 @@ impl CredentialBuilder {
     }
 
     /// Set expiration timestamp (microseconds since epoch)
-    pub fn not_after(mut self, not_after: u64) -> Self {
+    pub const fn not_after(mut self, not_after: u64) -> Self {
         self.not_after = not_after;
         self
     }
@@ -100,7 +100,7 @@ impl CredentialBuilder {
         rand::thread_rng().fill_bytes(&mut iv);
 
         // Build headers
-        let (main_header, tpm2_header) = self.build_headers(&iv, tpm2)?;
+        let (main_header, tpm2_header) = Self::build_headers(&iv, tpm2)?;
 
         // Build plaintext: metadata header + secret
         let mut plaintext = self.build_metadata_header()?;
@@ -113,7 +113,7 @@ impl CredentialBuilder {
 
         // Encrypt with AES-256-GCM
         let cipher = Aes256Gcm::new_from_slice(&aes_key)
-            .map_err(|e| anyhow!("Failed to create cipher: {}", e))?;
+            .map_err(|e| anyhow!("Failed to create cipher: {e}"))?;
 
         // GCM standard uses 12-byte nonce, but systemd stores 16 bytes
         // and uses first 12 for the actual nonce
@@ -127,7 +127,7 @@ impl CredentialBuilder {
                     aad: &aad,
                 },
             )
-            .map_err(|e| anyhow!("Encryption failed: {}", e))?;
+            .map_err(|e| anyhow!("Encryption failed: {e}"))?;
 
         // Build final output
         let mut output = Vec::new();
@@ -147,7 +147,7 @@ impl CredentialBuilder {
     }
 
     /// Build the main credential header
-    fn build_headers(&self, iv: &[u8], tpm2: &Tpm2SealedData) -> Result<(Vec<u8>, Vec<u8>)> {
+    fn build_headers(iv: &[u8], tpm2: &Tpm2SealedData) -> Result<(Vec<u8>, Vec<u8>)> {
         // Main header (encrypted_credential_header)
         let mut main = Vec::new();
         main.extend_from_slice(&CRED_AES256_GCM_BY_TPM2_HMAC);
@@ -192,8 +192,7 @@ impl CredentialBuilder {
         header.write_u64::<LittleEndian>(self.not_after)?;
         header.write_u32::<LittleEndian>(name_bytes.len() as u32)?;
         header.extend_from_slice(name_bytes);
-        header.push(0); // NUL terminator
-        // Pad to 8-byte boundary
+        // Pad to 8-byte boundary (padding bytes act as implicit NUL terminators)
         while header.len() % 8 != 0 {
             header.push(0);
         }

@@ -105,9 +105,10 @@
             }
           );
         }
-        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux
-          # VM tests (Linux only)
-          (import ./tests { inherit pkgs mkcreds; });
+        //
+          pkgs.lib.optionalAttrs pkgs.stdenv.isLinux
+            # VM tests (Linux only)
+            (import ./tests { inherit pkgs mkcreds; });
 
         # Formatter for `nix fmt`
         formatter = treefmtEval.config.build.wrapper;

@@ -13,9 +13,9 @@ use tss_esapi::{
         resource_handles::Hierarchy,
     },
     structures::{
-        CreateKeyResult, CreatePrimaryKeyResult, Digest as TpmDigest, PcrSelectionListBuilder,
-        PcrSlot, Public, PublicBuilder, PublicEccParametersBuilder, SensitiveData,
-        SymmetricDefinition, SymmetricDefinitionObject,
+        CreateKeyResult, CreatePrimaryKeyResult, Digest as TpmDigest, EccPoint,
+        PcrSelectionListBuilder, PcrSlot, Public, PublicBuilder, PublicEccParametersBuilder,
+        SensitiveData, SymmetricDefinition, SymmetricDefinitionObject,
     },
     tcti_ldr::TctiNameConf,
     traits::Marshall,
@@ -51,7 +51,7 @@ impl ExpectedPcrValue {
             .with_context(|| format!("Invalid PCR index: {}", parts[0]))?;
 
         if index > 23 {
-            return Err(anyhow!("PCR index must be 0-23, got {}", index));
+            return Err(anyhow!("PCR index must be 0-23, got {index}"));
         }
 
         if parts.len() == 1 {
@@ -66,7 +66,7 @@ impl ExpectedPcrValue {
         // Parse "alg=value"
         let alg_value: Vec<&str> = parts[1].splitn(2, '=').collect();
         if alg_value.len() != 2 {
-            return Err(anyhow!("Invalid PCR spec format: {}", spec));
+            return Err(anyhow!("Invalid PCR spec format: {spec}"));
         }
 
         let hash_alg = match alg_value[0].to_lowercase().as_str() {
@@ -74,7 +74,7 @@ impl ExpectedPcrValue {
             "sha1" => HashingAlgorithm::Sha1,
             "sha384" => HashingAlgorithm::Sha384,
             "sha512" => HashingAlgorithm::Sha512,
-            other => return Err(anyhow!("Unsupported hash algorithm: {}", other)),
+            other => return Err(anyhow!("Unsupported hash algorithm: {other}")),
         };
 
         let value = hex::decode(alg_value[1])
@@ -98,7 +98,7 @@ impl Tpm2Sealer {
     pub fn new(device: &str) -> Result<Self> {
         let tcti = TctiNameConf::from_environment_variable()
             .or_else(|_| TctiNameConf::from_str(device))
-            .with_context(|| format!("Invalid TCTI: {}", device))?;
+            .with_context(|| format!("Invalid TCTI: {device}"))?;
 
         let context = TpmContext::new(tcti).context("Failed to create TPM2 context")?;
 
@@ -119,7 +119,7 @@ impl Tpm2Sealer {
         let resolved_values = self.resolve_pcr_values(pcr_values)?;
 
         // Calculate the policy digest from expected PCR values
-        let policy_hash = self.calculate_pcr_policy(&resolved_values)?;
+        let policy_hash = Self::calculate_pcr_policy(&resolved_values);
 
         // Create primary key (SRK)
         let primary = self.create_primary_key()?;
@@ -131,7 +131,7 @@ impl Tpm2Sealer {
 
         // Serialize the sealed blob
         let blob =
-            self.marshal_sealed_blob(&create_result.out_public, &create_result.out_private)?;
+            Self::marshal_sealed_blob(&create_result.out_public, &create_result.out_private)?;
 
         // Calculate PCR mask
         let pcr_mask = resolved_values
@@ -173,7 +173,7 @@ impl Tpm2Sealer {
         // PcrSlot uses bit flags, so index 7 -> 1 << 7 = 0x80
         let slot_value = 1u32 << index;
         let slot = PcrSlot::try_from(slot_value)
-            .map_err(|_| anyhow!("Invalid PCR index: {} (slot value {})", index, slot_value))?;
+            .map_err(|_| anyhow!("Invalid PCR index: {index} (slot value {slot_value})"))?;
 
         let selection = PcrSelectionListBuilder::new()
             .with_selection(hash_alg, &[slot])
@@ -187,7 +187,7 @@ impl Tpm2Sealer {
 
         let digest_list: Vec<_> = digests.value().to_vec();
         if digest_list.is_empty() {
-            return Err(anyhow!("No PCR value returned for index {}", index));
+            return Err(anyhow!("No PCR value returned for index {index}"));
         }
 
         Ok(digest_list[0].value().to_vec())
@@ -195,7 +195,7 @@ impl Tpm2Sealer {
 
     /// Calculate PolicyPCR digest from expected values.
     /// This is the core function that allows binding to FUTURE PCR states.
-    fn calculate_pcr_policy(&self, pcr_values: &[(u32, Vec<u8>)]) -> Result<Vec<u8>> {
+    fn calculate_pcr_policy(pcr_values: &[(u32, Vec<u8>)]) -> Vec<u8> {
         // PolicyPCR calculation (from TPM2 spec Part 3):
         // policyDigestNew = H(policyDigestOld || TPM_CC_PolicyPCR || pcrs || digestTPM)
         // where:
@@ -215,21 +215,21 @@ impl Tpm2Sealer {
         let pcr_digest = pcr_hasher.finalize();
 
         // Build PCR selection structure
-        let pcr_selection = self.build_pcr_selection_bytes(pcr_values)?;
+        let pcr_selection = Self::build_pcr_selection_bytes(pcr_values);
 
         // Extend policy: H(policy || TPM_CC_PolicyPCR || pcr_selection || pcr_digest)
         let mut policy_hasher = Sha256::new();
         policy_hasher.update(policy);
-        policy_hasher.update(0x0000017Fu32.to_be_bytes());
+        policy_hasher.update(0x0000_017F_u32.to_be_bytes());
         policy_hasher.update(&pcr_selection);
         policy_hasher.update(pcr_digest);
         policy = policy_hasher.finalize().into();
 
-        Ok(policy.to_vec())
+        policy.to_vec()
     }
 
     /// Build PCR selection bytes in TPM2 wire format
-    fn build_pcr_selection_bytes(&self, pcr_values: &[(u32, Vec<u8>)]) -> Result<Vec<u8>> {
+    fn build_pcr_selection_bytes(pcr_values: &[(u32, Vec<u8>)]) -> Vec<u8> {
         // TPML_PCR_SELECTION format:
         // - count (4 bytes, big-endian)
         // - array of TPMS_PCR_SELECTION:
@@ -257,7 +257,7 @@ impl Tpm2Sealer {
         }
         buf.extend_from_slice(&pcr_mask);
 
-        Ok(buf)
+        buf
     }
 
     /// Create primary key (Storage Root Key)
@@ -300,7 +300,7 @@ impl Tpm2Sealer {
                 .build()
                 .context("Failed to build ECC parameters")?,
             )
-            .with_ecc_unique_identifier(Default::default())
+            .with_ecc_unique_identifier(EccPoint::default())
             .build()
             .context("Failed to build public template")?;
 
@@ -344,7 +344,7 @@ impl Tpm2Sealer {
             .with_keyed_hash_parameters(tss_esapi::structures::PublicKeyedHashParameters::new(
                 tss_esapi::structures::KeyedHashScheme::Null,
             ))
-            .with_keyed_hash_unique_identifier(Default::default())
+            .with_keyed_hash_unique_identifier(TpmDigest::default())
             .build()
             .context("Failed to build sealed object public")?;
 
@@ -361,7 +361,6 @@ impl Tpm2Sealer {
 
     /// Marshal sealed blob in systemd-compatible format
     fn marshal_sealed_blob(
-        &self,
         public: &Public,
         private: &tss_esapi::structures::Private,
     ) -> Result<Vec<u8>> {

@@ -139,7 +139,7 @@ fn main() -> Result<()> {
         io::stdout().write_all(encoded.as_bytes())?;
         io::stdout().write_all(b"\n")?;
     } else {
-        std::fs::write(&args.output, format!("{}\n", encoded))
+        std::fs::write(&args.output, format!("{encoded}\n"))
             .with_context(|| format!("Failed to write to {}", args.output))?;
         eprintln!("Credential written to {}", args.output);
     }
@@ -190,17 +190,14 @@ fn parse_timestamp(s: &str) -> Result<u64> {
     // Try parsing as numeric timestamp
     if let Ok(ts) = s.parse::<u64>() {
         // If it looks like seconds (< year 3000 in seconds), convert to microseconds
-        if ts < 32503680000 {
+        if ts < 32_503_680_000 {
             return Ok(ts.saturating_mul(1_000_000));
         }
         // Otherwise assume it's already in microseconds
         return Ok(ts);
     }
 
-    anyhow::bail!(
-        "Invalid timestamp format: {}. Use Unix timestamp, +DURATION, or 'infinity'",
-        s
-    )
+    anyhow::bail!("Invalid timestamp format: {s}. Use Unix timestamp, +DURATION, or 'infinity'")
 }
 
 /// Parse duration string like "5min", "1h", "7d" into microseconds.
@@ -213,7 +210,7 @@ fn parse_duration(s: &str) -> Result<u64> {
 
     let num: u64 = num_str
         .parse()
-        .with_context(|| format!("Invalid duration number: {}", num_str))?;
+        .with_context(|| format!("Invalid duration number: {num_str}"))?;
 
     let multiplier: u64 = match unit.trim().to_lowercase().as_str() {
         "" | "s" | "sec" | "second" | "seconds" => 1_000_000,
@@ -221,7 +218,7 @@ fn parse_duration(s: &str) -> Result<u64> {
         "h" | "hr" | "hour" | "hours" => 3600 * 1_000_000,
         "d" | "day" | "days" => 86400 * 1_000_000,
         "w" | "week" | "weeks" => 7 * 86400 * 1_000_000,
-        other => anyhow::bail!("Unknown duration unit: {}", other),
+        other => anyhow::bail!("Unknown duration unit: {other}"),
     };
 
     Ok(num.saturating_mul(multiplier))
@@ -250,7 +247,7 @@ fn read_secret(path: &str) -> Result<Zeroizing<Vec<u8>>> {
             .context("Failed to read secret from stdin")?;
         buf
     } else {
-        std::fs::read(path).with_context(|| format!("Failed to read secret from {}", path))?
+        std::fs::read(path).with_context(|| format!("Failed to read secret from {path}"))?
     };
     Ok(Zeroizing::new(data))
 }
@@ -353,7 +350,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_micros() as u64;
-        
+
         // Should be roughly 1 hour from now (with some tolerance)
         let one_hour_us = 3600 * 1_000_000;
         assert!(result > now_approx);

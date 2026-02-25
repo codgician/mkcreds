@@ -18,7 +18,6 @@ jobs:
         uses: cachix/install-nix-action@v31
       - name: Run flake checks
         run: nix flake check
-
   build:
     name: Build (${{ matrix.system }})
     needs: check
