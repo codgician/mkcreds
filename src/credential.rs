@@ -180,10 +180,7 @@ impl CredentialBuilder {
             .policy_hash
             .len()
             .try_into()
-            .map_err(|_| anyhow!(
-                "Policy hash too large: {} bytes",
-                tpm2.policy_hash.len()
-            ))?;
+            .map_err(|_| anyhow!("Policy hash too large: {} bytes", tpm2.policy_hash.len()))?;
         tpm2_hdr.write_u32::<LittleEndian>(blob_size)?;
         tpm2_hdr.write_u32::<LittleEndian>(policy_hash_size)?;
         tpm2_hdr.extend_from_slice(&tpm2.blob); // BLOB FIRST

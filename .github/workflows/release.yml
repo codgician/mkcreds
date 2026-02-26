@@ -6,54 +6,27 @@ on:
 permissions:
   contents: write
 jobs:
-  build:
-    name: Build (${{ matrix.system }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - system: x86_64-linux
-            runner: ubuntu-24.04
-            artifact: mkcreds-x86_64-linux
-          - system: aarch64-linux
-            runner: ubuntu-24.04-arm
-            artifact: mkcreds-aarch64-linux
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-      - name: Build for ${{ matrix.system }}
-        run: nix build .#packages.${{ matrix.system }}.default
-      - name: Prepare artifact
-        run: |
-          cp result/bin/mkcreds ${{ matrix.artifact }}
-          chmod +x ${{ matrix.artifact }}
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
   release:
     name: Create Release
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Download artifacts from build workflow
+        uses: dawidd6/action-download-artifact@v6
         with:
+          workflow: build.yml
+          commit: ${{ github.sha }}
           path: artifacts
       - name: Prepare release assets
         run: |
           mkdir -p release
           for dir in artifacts/*/; do
-            artifact=$(basename "$dir")
-            cp "$dir/$artifact" "release/$artifact"
-            chmod +x "release/$artifact"
+            name=$(basename "$dir")
+            cp "$dir/mkcreds" "release/$name"
+            chmod +x "release/$name"
           done
           cd release
-          for file in *; do
+          for file in mkcreds-*; do
             sha256sum "$file" > "$file.sha256"
           done
       - name: Create GitHub Release

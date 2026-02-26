@@ -6,7 +6,10 @@ use std::str::FromStr;
 use tss_esapi::{
     Context as TpmContext,
     attributes::ObjectAttributesBuilder,
-    constants::{CommandCode, SessionType, tss::{TPM2_ALG_ECC, TPM2_ALG_SHA256}},
+    constants::{
+        CommandCode, SessionType,
+        tss::{TPM2_ALG_ECC, TPM2_ALG_SHA256},
+    },
     handles::KeyHandle,
     interface_types::{
         algorithm::{HashingAlgorithm, PublicAlgorithm},
