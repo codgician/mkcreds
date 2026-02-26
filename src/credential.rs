@@ -22,6 +22,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tss_esapi::constants::tss::TPM2_ALG_SHA256;
 use zeroize::Zeroizing;
 
 /// systemd credential type IDs
@@ -168,10 +169,23 @@ impl CredentialBuilder {
         // The policy_hash_and_blob array contains: blob[blob_size] then policy_hash[policy_hash_size]
         let mut tpm2_hdr = Vec::new();
         tpm2_hdr.write_u64::<LittleEndian>(tpm2.pcr_mask)?;
-        tpm2_hdr.write_u16::<LittleEndian>(0x000B)?; // SHA256
+        tpm2_hdr.write_u16::<LittleEndian>(TPM2_ALG_SHA256)?;
         tpm2_hdr.write_u16::<LittleEndian>(tpm2.primary_alg)?;
-        tpm2_hdr.write_u32::<LittleEndian>(tpm2.blob.len() as u32)?;
-        tpm2_hdr.write_u32::<LittleEndian>(tpm2.policy_hash.len() as u32)?;
+        let blob_size: u32 = tpm2
+            .blob
+            .len()
+            .try_into()
+            .map_err(|_| anyhow!("TPM2 blob too large: {} bytes", tpm2.blob.len()))?;
+        let policy_hash_size: u32 = tpm2
+            .policy_hash
+            .len()
+            .try_into()
+            .map_err(|_| anyhow!(
+                "Policy hash too large: {} bytes",
+                tpm2.policy_hash.len()
+            ))?;
+        tpm2_hdr.write_u32::<LittleEndian>(blob_size)?;
+        tpm2_hdr.write_u32::<LittleEndian>(policy_hash_size)?;
         tpm2_hdr.extend_from_slice(&tpm2.blob); // BLOB FIRST
         tpm2_hdr.extend_from_slice(&tpm2.policy_hash); // POLICY_HASH SECOND
         // Pad to 8-byte boundary
@@ -190,7 +204,11 @@ impl CredentialBuilder {
         let mut header = Vec::new();
         header.write_u64::<LittleEndian>(self.timestamp)?;
         header.write_u64::<LittleEndian>(self.not_after)?;
-        header.write_u32::<LittleEndian>(name_bytes.len() as u32)?;
+        let name_size: u32 = name_bytes
+            .len()
+            .try_into()
+            .map_err(|_| anyhow!("Credential name too large: {} bytes", name_bytes.len()))?;
+        header.write_u32::<LittleEndian>(name_size)?;
         header.extend_from_slice(name_bytes);
         // Pad to 8-byte boundary (padding bytes act as implicit NUL terminators)
         while header.len() % 8 != 0 {

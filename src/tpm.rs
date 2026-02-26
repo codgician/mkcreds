@@ -6,7 +6,7 @@ use std::str::FromStr;
 use tss_esapi::{
     Context as TpmContext,
     attributes::ObjectAttributesBuilder,
-    constants::SessionType,
+    constants::{CommandCode, SessionType, tss::{TPM2_ALG_ECC, TPM2_ALG_SHA256}},
     handles::KeyHandle,
     interface_types::{
         algorithm::{HashingAlgorithm, PublicAlgorithm},
@@ -136,13 +136,13 @@ impl Tpm2Sealer {
         // Calculate PCR mask
         let pcr_mask = resolved_values
             .iter()
-            .fold(0u64, |mask, (idx, _)| mask | (1 << idx));
+            .fold(0u64, |mask, (idx, _)| mask | (1u64 << idx));
 
         Ok(Tpm2SealedData {
             blob,
             policy_hash,
             pcr_mask,
-            primary_alg: 0x0023, // TPM2_ALG_ECC
+            primary_alg: TPM2_ALG_ECC,
             sealed_secret,
         })
     }
@@ -220,7 +220,7 @@ impl Tpm2Sealer {
         // Extend policy: H(policy || TPM_CC_PolicyPCR || pcr_selection || pcr_digest)
         let mut policy_hasher = Sha256::new();
         policy_hasher.update(policy);
-        policy_hasher.update(0x0000_017F_u32.to_be_bytes());
+        policy_hasher.update((CommandCode::PolicyPcr as u32).to_be_bytes());
         policy_hasher.update(&pcr_selection);
         policy_hasher.update(pcr_digest);
         policy = policy_hasher.finalize().into();
@@ -243,7 +243,7 @@ impl Tpm2Sealer {
         buf.extend_from_slice(&1u32.to_be_bytes());
 
         // Hash algorithm = SHA256 (0x000B)
-        buf.extend_from_slice(&0x000Bu16.to_be_bytes());
+        buf.extend_from_slice(&TPM2_ALG_SHA256.to_be_bytes());
 
         // sizeofSelect = 3 (24 PCRs / 8 bits)
         buf.push(3u8);
@@ -376,12 +376,20 @@ impl Tpm2Sealer {
 
         // 1. Marshal PRIVATE first (TPM2B_PRIVATE: size BE + raw buffer)
         let private_value = private.value();
-        blob.extend_from_slice(&(private_value.len() as u16).to_be_bytes());
+        let private_len: u16 = private_value
+            .len()
+            .try_into()
+            .map_err(|_| anyhow!("TPM2B_PRIVATE too large: {} bytes", private_value.len()))?;
+        blob.extend_from_slice(&private_len.to_be_bytes());
         blob.extend_from_slice(private_value);
 
         // 2. Marshal PUBLIC second (TPM2B_PUBLIC: size BE + marshalled TPMT_PUBLIC)
         let public_bytes = public.marshall().context("Failed to marshal public")?;
-        blob.extend_from_slice(&(public_bytes.len() as u16).to_be_bytes());
+        let public_len: u16 = public_bytes
+            .len()
+            .try_into()
+            .map_err(|_| anyhow!("TPM2B_PUBLIC too large: {} bytes", public_bytes.len()))?;
+        blob.extend_from_slice(&public_len.to_be_bytes());
         blob.extend_from_slice(&public_bytes);
 
         // 3. Empty encrypted secret (for non-duplication case)
