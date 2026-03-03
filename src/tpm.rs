@@ -371,7 +371,7 @@ impl Tpm2Sealer {
                     }
                     v.clone()
                 }
-                None => self.read_pcr_value(pv.index, bank)?,
+                None => self.read_pcr(pv.index, bank)?,
             };
             resolved.push((pv.index, value));
         }
@@ -383,7 +383,7 @@ impl Tpm2Sealer {
     }
 
     /// Read a single PCR value from the TPM
-    fn read_pcr_value(&mut self, index: u32, hash_alg: HashingAlgorithm) -> Result<Vec<u8>> {
+    pub fn read_pcr(&mut self, index: u32, hash_alg: HashingAlgorithm) -> Result<Vec<u8>> {
         let slot_value = 1u32 << index;
         let slot = PcrSlot::try_from(slot_value)
             .map_err(|_| anyhow!("Invalid PCR index: {index} (slot value {slot_value})"))?;

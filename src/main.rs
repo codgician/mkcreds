@@ -10,7 +10,7 @@ use clap::Parser;
 use zeroize::Zeroizing;
 
 use crate::credential::CredentialBuilder;
-use crate::tpm::{ExpectedPcrValue, Tpm2Sealer, hash_alg_name};
+use crate::tpm::{ExpectedPcrValue, Tpm2Sealer, hash_alg_name, resolve_pcr_bank};
 
 /// Create systemd-creds compatible TPM2-sealed credentials with custom PCR values.
 ///
@@ -77,9 +77,15 @@ struct Args {
     #[arg(default_value = "-")]
     output: String,
 
-    /// Print the expected policy hash (hex) without creating a credential
+    /// Print the expected policy hash (hex) without creating a credential.
+    /// The policy hash is a digest representing the TPM2 PolicyPCR constraint.
     #[arg(long)]
     print_policy: bool,
+
+    /// Print current PCR values from the TPM without creating a credential.
+    /// Useful for debugging or capturing current state before sealing.
+    #[arg(long)]
+    print_pcrs: bool,
 }
 
 fn main() -> Result<()> {
@@ -95,6 +101,26 @@ fn main() -> Result<()> {
     // Initialize TPM
     let mut sealer =
         Tpm2Sealer::new(&args.tpm2_device).context("Failed to initialize TPM2 context")?;
+
+    // Handle --print-pcrs: show current PCR values and exit
+    if args.print_pcrs {
+        let available_banks = sealer.get_available_pcr_banks();
+        let pcr_bank = resolve_pcr_bank(&pcr_values, &available_banks)?;
+        eprintln!("Using PCR bank: {}", hash_alg_name(pcr_bank));
+        eprintln!();
+        for pv in &pcr_values {
+            let value = sealer
+                .read_pcr(pv.index, pcr_bank)
+                .with_context(|| format!("Failed to read PCR {}", pv.index))?;
+            println!(
+                "{}:{}={}",
+                pv.index,
+                hash_alg_name(pcr_bank).to_lowercase(),
+                hex::encode(&value)
+            );
+        }
+        return Ok(());
+    }
 
     // Handle --print-policy: just calculate and print policy hash, then exit
     if args.print_policy {

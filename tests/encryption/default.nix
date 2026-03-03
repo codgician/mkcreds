@@ -221,6 +221,20 @@ common.mkTest {
         assert policy_hash == policy_hash_explicit, "Explicit SHA256 should match auto-selected"
         machine.log(f"Policy hash (explicit SHA256): {policy_hash_explicit}")
 
+    with subtest("Print current PCR values (--print-pcrs)"):
+        output = machine.succeed("mkcreds --tpm2-pcrs='7+15' --print-pcrs").strip()
+        lines = output.split('\n')
+        assert len(lines) == 2, f"Expected 2 PCR values, got {len(lines)}"
+        
+        # Each line should be in format: index:alg=hexvalue
+        for line in lines:
+            assert ':sha256=' in line, f"Expected format 'index:sha256=hex', got '{line}'"
+            parts = line.split('=')
+            assert len(parts) == 2, f"Invalid format: {line}"
+            # SHA256 = 64 hex chars
+            assert len(parts[1]) == 64, f"Expected 64 hex chars, got {len(parts[1])}"
+        machine.log(f"PCR values: {lines}")
+
     with subtest("File input (not stdin)"):
         machine.succeed("echo -n 'file-input-secret' > /tmp/secret_input.txt")
         machine.succeed("mkcreds --tpm2-pcrs=15 /tmp/secret_input.txt /tmp/file_input.cred")

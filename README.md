@@ -41,7 +41,14 @@ systemd-creds decrypt mycred.cred -
 | `--name=NAME`        | Credential name (default: output filename)            |
 | `--not-after=TIME`   | Expiration (`+1h`, `+7d`, Unix timestamp, `infinity`) |
 | `--tpm2-device=PATH` | TPM device (default: `/dev/tpmrm0`)                   |
-| `--print-policy`     | Print policy hash only                                |
+| `--print-policy`     | Print TPM2 policy hash (for debugging)                |
+| `--print-pcrs`       | Print current PCR values (for debugging)              |
+
+### Debugging Options
+
+- **`--print-pcrs`**: Shows the current PCR values from the TPM in `index:alg=hex` format. Useful for capturing the current state before sealing.
+
+- **`--print-policy`**: Shows the TPM2 policy hash — a cryptographic digest representing the constraint "these PCRs must have these values". This hash is embedded in the credential and used by the TPM to enforce access control. Two credentials with identical PCR bindings will have the same policy hash.
 
 ## PCR Format
 
