@@ -6,8 +6,27 @@ on:
 permissions:
   contents: write
 jobs:
+  wait-for-build:
+    name: Wait for Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for build workflow
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          check-name: Build (x86_64-linux)
+          wait-interval: 10
+      - name: Wait for aarch64 build
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          check-name: Build (aarch64-linux)
+          wait-interval: 10
   release:
     name: Create Release
+    needs: wait-for-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
