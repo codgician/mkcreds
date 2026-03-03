@@ -7,7 +7,7 @@ use tss_esapi::{
     Context as TpmContext,
     attributes::ObjectAttributesBuilder,
     constants::{
-        CommandCode, SessionType,
+        CapabilityType, CommandCode, SessionType,
         tss::{TPM2_ALG_ECC, TPM2_ALG_SHA1, TPM2_ALG_SHA256, TPM2_ALG_SHA384, TPM2_ALG_SHA512},
     },
     handles::KeyHandle,
@@ -16,7 +16,7 @@ use tss_esapi::{
         resource_handles::Hierarchy,
     },
     structures::{
-        CreateKeyResult, CreatePrimaryKeyResult, Digest as TpmDigest, EccPoint,
+        CapabilityData, CreateKeyResult, CreatePrimaryKeyResult, Digest as TpmDigest, EccPoint,
         PcrSelectionListBuilder, PcrSlot, Public, PublicBuilder, PublicEccParametersBuilder,
         SensitiveData, SymmetricDefinition, SymmetricDefinitionObject,
     },
@@ -263,27 +263,25 @@ impl Tpm2Sealer {
         Ok(Self { context })
     }
 
-    /// Get available PCR banks from TPM
+    /// Get available PCR banks from TPM using capability query.
+    /// This avoids noisy error messages from failed PCR read probes.
     pub fn get_available_pcr_banks(&mut self) -> Vec<HashingAlgorithm> {
-        // SHA256 is mandatory per TPM2 spec
-        let mut banks = vec![HashingAlgorithm::Sha256];
+        // Query TPM for assigned PCR banks (TPM2_CAP_PCRS)
+        let capability_result = self
+            .context
+            .get_capability(CapabilityType::AssignedPcr, 0, 8);
 
-        // Probe other banks by attempting to read PCR 0
-        for alg in [
-            HashingAlgorithm::Sha1,
-            HashingAlgorithm::Sha384,
-            HashingAlgorithm::Sha512,
-        ] {
-            if PcrSelectionListBuilder::new()
-                .with_selection(alg, &[PcrSlot::Slot0])
-                .build()
-                .is_ok_and(|selection| self.context.pcr_read(selection).is_ok())
-            {
-                banks.push(alg);
+        match capability_result {
+            Ok((CapabilityData::AssignedPcr(pcr_selection_list), _)) => pcr_selection_list
+                .get_selections()
+                .iter()
+                .map(tss_esapi::structures::PcrSelection::hashing_algorithm)
+                .collect(),
+            _ => {
+                // Fallback: SHA256 is mandatory per TPM2 spec
+                vec![HashingAlgorithm::Sha256]
             }
         }
-
-        banks
     }
 
     /// Seal a random key with expected PCR values.
