@@ -5,31 +5,46 @@ on:
       - "v*"
 permissions:
   contents: write
+  actions: read
 jobs:
-  wait-for-build:
-    name: Wait for Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Wait for build workflow
-        uses: lewagon/wait-on-check-action@v1.3.4
-        with:
-          ref: ${{ github.sha }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          check-name: Build (x86_64-linux)
-          wait-interval: 10
-      - name: Wait for aarch64 build
-        uses: lewagon/wait-on-check-action@v1.3.4
-        with:
-          ref: ${{ github.sha }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          check-name: Build (aarch64-linux)
-          wait-interval: 10
   release:
     name: Create Release
-    needs: wait-for-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Wait for build workflow to succeed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Waiting for Build workflow on commit ${{ github.sha }}..."
+          # Wait up to 30 minutes for build to complete
+          for i in {1..180}; do
+            # Get the most recent Build workflow run for this commit
+            run_info=$(gh run list --workflow=build.yml --commit=${{ github.sha }} --json status,conclusion,databaseId --limit=1)
+            status=$(echo "$run_info" | jq -r '.[0].status // "not_found"')
+            conclusion=$(echo "$run_info" | jq -r '.[0].conclusion // "none"')
+            run_id=$(echo "$run_info" | jq -r '.[0].databaseId // "none"')
+
+            echo "Attempt $i: status=$status, conclusion=$conclusion, run_id=$run_id"
+
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "Build workflow succeeded!"
+                exit 0
+              else
+                echo "Build workflow failed with conclusion: $conclusion"
+                exit 1
+              fi
+            fi
+
+            if [ "$status" = "not_found" ]; then
+              echo "Build workflow not found yet, waiting..."
+            fi
+
+            sleep 10
+          done
+          echo "Timeout waiting for build workflow"
+          exit 1
       - name: Download artifacts from build workflow
         uses: dawidd6/action-download-artifact@v6
         with:
