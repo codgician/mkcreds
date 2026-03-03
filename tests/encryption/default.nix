@@ -207,12 +207,19 @@ common.mkTest {
     # Other CLI options
     # ==========================================================================
 
-    with subtest("Print policy hash (--print-policy)"):
+    with subtest("Print policy hash (--print-policy, auto-select bank)"):
         policy_hash = machine.succeed("mkcreds --tpm2-pcrs=15 --print-policy").strip()
-        # Policy hash should be 64 hex chars (SHA256)
+        # Policy hash should be 64 hex chars (SHA256 - auto-selected)
         assert len(policy_hash) == 64, f"Policy hash should be 64 hex chars, got {len(policy_hash)}"
         assert all(c in '0123456789abcdef' for c in policy_hash), "Policy hash should be hex"
-        machine.log(f"Policy hash: {policy_hash}")
+        machine.log(f"Policy hash (auto bank): {policy_hash}")
+
+    with subtest("Print policy hash (--print-policy, explicit SHA256 bank)"):
+        policy_hash_explicit = machine.succeed("mkcreds --tpm2-pcrs=15:sha256 --print-policy").strip()
+        assert len(policy_hash_explicit) == 64, f"Policy hash should be 64 hex chars, got {len(policy_hash_explicit)}"
+        # Should match the auto-selected one since SHA256 is preferred
+        assert policy_hash == policy_hash_explicit, "Explicit SHA256 should match auto-selected"
+        machine.log(f"Policy hash (explicit SHA256): {policy_hash_explicit}")
 
     with subtest("File input (not stdin)"):
         machine.succeed("echo -n 'file-input-secret' > /tmp/secret_input.txt")
