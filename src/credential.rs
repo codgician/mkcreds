@@ -22,7 +22,6 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tss_esapi::constants::tss::TPM2_ALG_SHA256;
 use zeroize::Zeroizing;
 
 /// systemd credential type IDs
@@ -47,6 +46,8 @@ pub struct Tpm2SealedData {
     pub policy_hash: Vec<u8>,
     /// PCR mask (which PCRs are bound)
     pub pcr_mask: u64,
+    /// PCR bank algorithm (TPM2_ALG_SHA256, etc.)
+    pub pcr_bank: u16,
     /// Primary key algorithm (ECC = 0x0023, RSA = 0x0001)
     pub primary_alg: u16,
     /// The actual sealed secret (random HMAC key)
@@ -62,10 +63,13 @@ pub struct CredentialBuilder {
 
 impl CredentialBuilder {
     pub fn new() -> Self {
+        // Get current time in microseconds since epoch
+        // If system clock is before epoch (shouldn't happen), use far-future timestamp
+        // which is safer than failing - the credential will still be valid
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
-            .unwrap_or(u64::MAX);
+            .unwrap_or(0); // Use epoch if clock is wrong
 
         Self {
             name: None,
@@ -169,7 +173,7 @@ impl CredentialBuilder {
         // The policy_hash_and_blob array contains: blob[blob_size] then policy_hash[policy_hash_size]
         let mut tpm2_hdr = Vec::new();
         tpm2_hdr.write_u64::<LittleEndian>(tpm2.pcr_mask)?;
-        tpm2_hdr.write_u16::<LittleEndian>(TPM2_ALG_SHA256)?;
+        tpm2_hdr.write_u16::<LittleEndian>(tpm2.pcr_bank)?;
         tpm2_hdr.write_u16::<LittleEndian>(tpm2.primary_alg)?;
         let blob_size: u32 = tpm2
             .blob

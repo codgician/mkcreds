@@ -10,7 +10,7 @@ use clap::Parser;
 use zeroize::Zeroizing;
 
 use crate::credential::CredentialBuilder;
-use crate::tpm::{ExpectedPcrValue, Tpm2Sealer};
+use crate::tpm::{ExpectedPcrValue, Tpm2Sealer, hash_alg_name};
 
 /// Create systemd-creds compatible TPM2-sealed credentials with custom PCR values.
 ///
@@ -39,16 +39,21 @@ struct Args {
     #[arg(short, long)]
     name: Option<String>,
 
-    /// PCR values to seal against (systemd-creds compatible syntax).
+    /// PCR values to seal against (systemd-cryptenroll compatible syntax).
     ///
-    /// Format: PCR[+PCR...] where each PCR is either:
-    ///   - INDEX              (use current value from TPM)
-    ///   - INDEX:ALG=VALUE    (use specified expected value)
+    /// Format: PCR[+PCR...] where each PCR is:
+    ///   - INDEX              (use current value, auto-select bank)
+    ///   - INDEX:ALG          (use current value from specific bank)
+    ///   - INDEX=VALUE        (use expected value, auto-select bank)
+    ///   - INDEX:ALG=VALUE    (use expected value from specific bank)
+    ///
+    /// The first specified algorithm becomes the default for all unspecified entries.
+    /// All PCRs must use the same algorithm (credential format limitation).
     ///
     /// Examples:
     ///   --tpm2-pcrs=7+15
-    ///   --tpm2-pcrs="7+15:sha256=abc123..."
-    ///   --tpm2-pcrs="7:sha256=xxx+15:sha256=yyy"
+    ///   --tpm2-pcrs=7:sha256+15
+    ///   --tpm2-pcrs="7:sha256=abc123...+15"
     #[arg(long = "tpm2-pcrs", required = true, verbatim_doc_comment)]
     tpm2_pcrs: String,
 
@@ -91,16 +96,20 @@ fn main() -> Result<()> {
     let mut sealer =
         Tpm2Sealer::new(&args.tpm2_device).context("Failed to initialize TPM2 context")?;
 
+    // Handle --print-policy: just calculate and print policy hash, then exit
+    if args.print_policy {
+        let (policy_hash, bank) = sealer
+            .calculate_policy_only(&pcr_values)
+            .context("Failed to calculate policy")?;
+        println!("{}", hex::encode(&policy_hash));
+        eprintln!("Policy hash calculated using {} bank", hash_alg_name(bank));
+        return Ok(());
+    }
+
     // Seal random key with expected PCR values
     let tpm2_data = sealer
         .seal_with_expected_pcrs(&pcr_values)
         .context("Failed to seal to TPM2")?;
-
-    if args.print_policy {
-        // Just print the policy hash and exit
-        println!("{}", hex::encode(&tpm2_data.policy_hash));
-        return Ok(());
-    }
 
     // Read secret from stdin or file
     let secret = read_secret(&args.input)?;
@@ -164,6 +173,9 @@ fn derive_name_from_output(output: &str) -> String {
         .to_string()
 }
 
+/// Year 3000 in seconds - timestamps below this are assumed to be in seconds
+const YEAR_3000_SECONDS: u64 = 32_503_680_000;
+
 /// Parse timestamp string into microseconds since epoch.
 /// Supports:
 ///   - Unix timestamp (seconds or microseconds)
@@ -181,8 +193,8 @@ fn parse_timestamp(s: &str) -> Result<u64> {
     if let Some(rest) = s.strip_prefix('+') {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_micros() as u64)
-            .unwrap_or(0);
+            .context("System clock is before Unix epoch")?
+            .as_micros() as u64;
         let duration = parse_duration(rest)?;
         return Ok(now.saturating_add(duration));
     }
@@ -190,7 +202,7 @@ fn parse_timestamp(s: &str) -> Result<u64> {
     // Try parsing as numeric timestamp
     if let Ok(ts) = s.parse::<u64>() {
         // If it looks like seconds (< year 3000 in seconds), convert to microseconds
-        if ts < 32_503_680_000 {
+        if ts < YEAR_3000_SECONDS {
             return Ok(ts.saturating_mul(1_000_000));
         }
         // Otherwise assume it's already in microseconds
@@ -224,13 +236,12 @@ fn parse_duration(s: &str) -> Result<u64> {
     Ok(num.saturating_mul(multiplier))
 }
 
-/// Parse systemd-creds compatible PCR specification.
-/// Format: "PCR[+PCR...]" where each PCR is "INDEX" or "INDEX:ALG=VALUE"
-///
-/// Examples:
-///   "7+15" -> [PCR 7 (current), PCR 15 (current)]
-///   "7+15:sha256=abc" -> [PCR 7 (current), PCR 15 (expected: abc)]
-///   "7:sha256=xxx+15:sha256=yyy" -> [PCR 7 (expected: xxx), PCR 15 (expected: yyy)]
+/// Parse systemd-cryptenroll compatible PCR specification.
+/// Format: "PCR[+PCR...]" where each PCR is:
+///   - INDEX              (use current value, auto-select bank)
+///   - INDEX:ALG          (use current value from specific bank)
+///   - INDEX=VALUE        (use expected value, auto-select bank)
+///   - INDEX:ALG=VALUE    (use expected value from specific bank)
 fn parse_tpm2_pcrs(spec: &str) -> Result<Vec<ExpectedPcrValue>> {
     spec.split('+')
         .filter(|s| !s.is_empty())

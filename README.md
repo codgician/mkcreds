@@ -45,11 +45,21 @@ systemd-creds decrypt mycred.cred -
 
 ## PCR Format
 
-Compatible with `systemd-cryptenroll` syntax:
+The `--tpm2-pcrs` syntax is compatible with [`systemd-cryptenroll`](https://www.freedesktop.org/software/systemd/man/latest/systemd-cryptenroll.html#--tpm2-pcrs=PCR):
 
-- `7+15` — Use current values
-- `15:sha256=<hex>` — Use expected value
-- `7+15:sha256=<hex>` — Mix current and expected
+| Format            | Description                             |
+| ----------------- | --------------------------------------- |
+| `7`               | PCR 7, auto-select bank, current value  |
+| `7:sha256`        | PCR 7, SHA256 bank, current value       |
+| `7=<hex>`         | PCR 7, auto-select bank, expected value |
+| `7:sha256=<hex>`  | PCR 7, SHA256 bank, expected value      |
+| `system-identity` | PCR 15 by name, current value           |
+
+Multiple PCRs: `7+15` or `secure-boot-policy+system-identity`
+
+Supported banks: `sha1`, `sha256`, `sha384`, `sha512`
+
+When no bank is specified, auto-selects the best available (prefers SHA256 > SHA384 > SHA512 > SHA1).
 
 ## License
 

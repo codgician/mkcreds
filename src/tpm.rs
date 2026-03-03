@@ -1,14 +1,14 @@
 //! TPM2 operations: policy calculation and sealing with expected PCR values.
 
 use anyhow::{Context, Result, anyhow};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use std::str::FromStr;
 use tss_esapi::{
     Context as TpmContext,
     attributes::ObjectAttributesBuilder,
     constants::{
         CommandCode, SessionType,
-        tss::{TPM2_ALG_ECC, TPM2_ALG_SHA256},
+        tss::{TPM2_ALG_ECC, TPM2_ALG_SHA1, TPM2_ALG_SHA256, TPM2_ALG_SHA384, TPM2_ALG_SHA512},
     },
     handles::KeyHandle,
     interface_types::{
@@ -37,57 +37,212 @@ const SEALED_KEY_SIZE: usize = 32;
 #[derive(Debug, Clone)]
 pub struct ExpectedPcrValue {
     pub index: u32,
-    pub hash_alg: HashingAlgorithm,
-    pub value: Option<Vec<u8>>, // None = read current value from TPM
+    pub hash_alg: Option<HashingAlgorithm>, // None = use default bank
+    pub value: Option<Vec<u8>>,             // None = read current value from TPM
 }
 
 impl ExpectedPcrValue {
-    /// Parse a PCR specification string.
+    /// Parse a PCR specification string (systemd-cryptenroll compatible).
+    ///
     /// Formats:
-    ///   "7"                    - PCR 7, read current value
-    ///   "7:sha256=abcd..."     - PCR 7, expected SHA256 value
+    ///   "7"                    - PCR 7, default bank, read current value
+    ///   "7:sha256"             - PCR 7, SHA256 bank, read current value
+    ///   "7=abcd..."            - PCR 7, default bank, expected value
+    ///   "7:sha256=abcd..."     - PCR 7, SHA256 bank, expected value
     pub fn parse(spec: &str) -> Result<Self> {
-        let parts: Vec<&str> = spec.splitn(2, ':').collect();
+        let spec = spec.trim();
 
-        let index: u32 = parts[0]
-            .parse()
-            .with_context(|| format!("Invalid PCR index: {}", parts[0]))?;
+        // Check for "index:alg" or "index:alg=value" format
+        if let Some(colon_pos) = spec.find(':') {
+            let index_str = &spec[..colon_pos];
+            let rest = &spec[colon_pos + 1..];
 
+            let index = parse_pcr_index(index_str)?;
+
+            // Check for "alg=value" or just "alg"
+            if let Some(eq_pos) = rest.find('=') {
+                let alg_str = &rest[..eq_pos];
+                let value_str = &rest[eq_pos + 1..];
+
+                let hash_alg = parse_hash_algorithm(alg_str)?;
+                let value = hex::decode(value_str)
+                    .with_context(|| format!("Invalid hex value: {value_str}"))?;
+
+                Ok(Self {
+                    index,
+                    hash_alg: Some(hash_alg),
+                    value: Some(value),
+                })
+            } else {
+                // Just "index:alg"
+                let hash_alg = parse_hash_algorithm(rest)?;
+                Ok(Self {
+                    index,
+                    hash_alg: Some(hash_alg),
+                    value: None,
+                })
+            }
+        } else if let Some(eq_pos) = spec.find('=') {
+            // "index=value" format (no algorithm specified)
+            let index_str = &spec[..eq_pos];
+            let value_str = &spec[eq_pos + 1..];
+
+            let index = parse_pcr_index(index_str)?;
+            let value = hex::decode(value_str)
+                .with_context(|| format!("Invalid hex value: {value_str}"))?;
+
+            Ok(Self {
+                index,
+                hash_alg: None,
+                value: Some(value),
+            })
+        } else {
+            // Just "index"
+            let index = parse_pcr_index(spec)?;
+            Ok(Self {
+                index,
+                hash_alg: None,
+                value: None,
+            })
+        }
+    }
+}
+
+/// Parse PCR index from string (supports numeric and well-known names)
+fn parse_pcr_index(s: &str) -> Result<u32> {
+    let s = s.trim();
+
+    // Try numeric first
+    if let Ok(index) = s.parse::<u32>() {
         if index > 23 {
             return Err(anyhow!("PCR index must be 0-23, got {index}"));
         }
+        return Ok(index);
+    }
 
-        if parts.len() == 1 {
-            // No value specified, read from TPM
-            return Ok(Self {
-                index,
-                hash_alg: HashingAlgorithm::Sha256,
-                value: None,
-            });
+    // Try well-known names (matching systemd)
+    let index = match s.to_lowercase().as_str() {
+        "platform-code" => 0,
+        "platform-config" => 1,
+        "external-code" => 2,
+        "external-config" => 3,
+        "boot-loader-code" => 4,
+        "boot-loader-config" => 5,
+        "secure-boot-policy" => 7,
+        "kernel-initrd" => 9,
+        "ima" => 10,
+        "kernel-boot" => 11,
+        "kernel-config" => 12,
+        "sysexts" => 13,
+        "shim-policy" => 14,
+        "system-identity" => 15,
+        "debug" => 16,
+        "application-support" => 23,
+        _ => return Err(anyhow!("Invalid PCR index or name: {s}")),
+    };
+
+    Ok(index)
+}
+
+/// Parse hash algorithm name
+fn parse_hash_algorithm(s: &str) -> Result<HashingAlgorithm> {
+    match s.trim().to_lowercase().as_str() {
+        "sha1" => Ok(HashingAlgorithm::Sha1),
+        "sha256" => Ok(HashingAlgorithm::Sha256),
+        "sha384" => Ok(HashingAlgorithm::Sha384),
+        "sha512" => Ok(HashingAlgorithm::Sha512),
+        other => Err(anyhow!("Unsupported hash algorithm: {other}")),
+    }
+}
+
+/// Get the TPM2 algorithm ID for a HashingAlgorithm
+const fn hash_alg_to_tpm2_alg(alg: HashingAlgorithm) -> u16 {
+    match alg {
+        HashingAlgorithm::Sha1 => TPM2_ALG_SHA1,
+        HashingAlgorithm::Sha384 => TPM2_ALG_SHA384,
+        HashingAlgorithm::Sha512 => TPM2_ALG_SHA512,
+        // SHA256 and other algorithms default to SHA256
+        _ => TPM2_ALG_SHA256,
+    }
+}
+
+/// Get the digest size for a hash algorithm
+const fn hash_alg_digest_size(alg: HashingAlgorithm) -> usize {
+    match alg {
+        HashingAlgorithm::Sha1 => 20,
+        HashingAlgorithm::Sha384 => 48,
+        HashingAlgorithm::Sha512 => 64,
+        // SHA256 and other algorithms default to 32 bytes
+        _ => 32,
+    }
+}
+
+/// Resolve the PCR bank to use.
+///
+/// Algorithm (matching systemd-cryptenroll):
+/// 1. If any PCR specifies an algorithm, that becomes the default
+/// 2. All PCRs must use the same algorithm (error if mixed)
+/// 3. If no algorithm specified, auto-detect best bank from TPM
+pub fn resolve_pcr_bank(
+    pcr_values: &[ExpectedPcrValue],
+    available_banks: &[HashingAlgorithm],
+) -> Result<HashingAlgorithm> {
+    // Find first explicitly specified algorithm
+    let mut specified_alg: Option<HashingAlgorithm> = None;
+
+    for pv in pcr_values {
+        if let Some(alg) = pv.hash_alg {
+            if let Some(existing) = specified_alg {
+                if existing != alg {
+                    return Err(anyhow!(
+                        "Mixed PCR banks not supported: got {} and {}. \
+                         All PCRs must use the same hash algorithm.",
+                        hash_alg_name(existing),
+                        hash_alg_name(alg)
+                    ));
+                }
+            } else {
+                specified_alg = Some(alg);
+            }
         }
+    }
 
-        // Parse "alg=value"
-        let alg_value: Vec<&str> = parts[1].splitn(2, '=').collect();
-        if alg_value.len() != 2 {
-            return Err(anyhow!("Invalid PCR spec format: {spec}"));
+    // If an algorithm was specified, use it
+    if let Some(alg) = specified_alg {
+        if !available_banks.contains(&alg) {
+            return Err(anyhow!(
+                "TPM does not support {} PCR bank",
+                hash_alg_name(alg)
+            ));
         }
+        return Ok(alg);
+    }
 
-        let hash_alg = match alg_value[0].to_lowercase().as_str() {
-            "sha256" => HashingAlgorithm::Sha256,
-            "sha1" => HashingAlgorithm::Sha1,
-            "sha384" => HashingAlgorithm::Sha384,
-            "sha512" => HashingAlgorithm::Sha512,
-            other => return Err(anyhow!("Unsupported hash algorithm: {other}")),
-        };
+    // Auto-detect best bank (systemd preference order: SHA256 > SHA384 > SHA512 > SHA1)
+    let preference_order = [
+        HashingAlgorithm::Sha256,
+        HashingAlgorithm::Sha384,
+        HashingAlgorithm::Sha512,
+        HashingAlgorithm::Sha1,
+    ];
 
-        let value = hex::decode(alg_value[1])
-            .with_context(|| format!("Invalid hex value: {}", alg_value[1]))?;
+    for alg in preference_order {
+        if available_banks.contains(&alg) {
+            return Ok(alg);
+        }
+    }
 
-        Ok(Self {
-            index,
-            hash_alg,
-            value: Some(value),
-        })
+    Err(anyhow!("No supported PCR bank found on TPM"))
+}
+
+/// Get human-readable name for a hash algorithm
+pub const fn hash_alg_name(alg: HashingAlgorithm) -> &'static str {
+    match alg {
+        HashingAlgorithm::Sha1 => "SHA1",
+        HashingAlgorithm::Sha256 => "SHA256",
+        HashingAlgorithm::Sha384 => "SHA384",
+        HashingAlgorithm::Sha512 => "SHA512",
+        _ => "unknown",
     }
 }
 
@@ -108,21 +263,50 @@ impl Tpm2Sealer {
         Ok(Self { context })
     }
 
+    /// Get available PCR banks from TPM
+    pub fn get_available_pcr_banks(&mut self) -> Vec<HashingAlgorithm> {
+        // SHA256 is mandatory per TPM2 spec
+        let mut banks = vec![HashingAlgorithm::Sha256];
+
+        // Probe other banks by attempting to read PCR 0
+        for alg in [
+            HashingAlgorithm::Sha1,
+            HashingAlgorithm::Sha384,
+            HashingAlgorithm::Sha512,
+        ] {
+            if PcrSelectionListBuilder::new()
+                .with_selection(alg, &[PcrSlot::Slot0])
+                .build()
+                .is_ok_and(|selection| self.context.pcr_read(selection).is_ok())
+            {
+                banks.push(alg);
+            }
+        }
+
+        banks
+    }
+
     /// Seal a random key with expected PCR values.
     /// Returns Tpm2SealedData containing everything needed for the credential.
     pub fn seal_with_expected_pcrs(
         &mut self,
         pcr_values: &[ExpectedPcrValue],
     ) -> Result<Tpm2SealedData> {
+        // Get available banks and resolve which one to use
+        let available_banks = self.get_available_pcr_banks();
+        let pcr_bank = resolve_pcr_bank(pcr_values, &available_banks)?;
+
+        eprintln!("Using PCR bank: {}", hash_alg_name(pcr_bank));
+
         // Generate random key to seal
         let mut sealed_secret = Zeroizing::new(vec![0u8; SEALED_KEY_SIZE]);
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut sealed_secret);
 
         // Resolve any PCR values that need to be read from TPM
-        let resolved_values = self.resolve_pcr_values(pcr_values)?;
+        let resolved_values = self.resolve_pcr_values(pcr_values, pcr_bank)?;
 
         // Calculate the policy digest from expected PCR values
-        let policy_hash = Self::calculate_pcr_policy(&resolved_values);
+        let policy_hash = Self::calculate_pcr_policy(&resolved_values, pcr_bank);
 
         // Create primary key (SRK)
         let primary = self.create_primary_key()?;
@@ -145,22 +329,49 @@ impl Tpm2Sealer {
             blob,
             policy_hash,
             pcr_mask,
+            pcr_bank: hash_alg_to_tpm2_alg(pcr_bank),
             primary_alg: TPM2_ALG_ECC,
             sealed_secret,
         })
+    }
+
+    /// Calculate policy hash only (for --print-policy)
+    pub fn calculate_policy_only(
+        &mut self,
+        pcr_values: &[ExpectedPcrValue],
+    ) -> Result<(Vec<u8>, HashingAlgorithm)> {
+        let available_banks = self.get_available_pcr_banks();
+        let pcr_bank = resolve_pcr_bank(pcr_values, &available_banks)?;
+        let resolved_values = self.resolve_pcr_values(pcr_values, pcr_bank)?;
+        let policy_hash = Self::calculate_pcr_policy(&resolved_values, pcr_bank);
+        Ok((policy_hash, pcr_bank))
     }
 
     /// Resolve PCR values - read current values for any that weren't specified
     fn resolve_pcr_values(
         &mut self,
         pcr_values: &[ExpectedPcrValue],
+        bank: HashingAlgorithm,
     ) -> Result<Vec<(u32, Vec<u8>)>> {
         let mut resolved = Vec::new();
 
         for pv in pcr_values {
             let value = match &pv.value {
-                Some(v) => v.clone(),
-                None => self.read_pcr_value(pv.index, pv.hash_alg)?,
+                Some(v) => {
+                    // Validate that the provided value has correct length for the bank
+                    let expected_len = hash_alg_digest_size(bank);
+                    if v.len() != expected_len {
+                        return Err(anyhow!(
+                            "PCR {} value has wrong length: got {} bytes, expected {} for {}",
+                            pv.index,
+                            v.len(),
+                            expected_len,
+                            hash_alg_name(bank)
+                        ));
+                    }
+                    v.clone()
+                }
+                None => self.read_pcr_value(pv.index, bank)?,
             };
             resolved.push((pv.index, value));
         }
@@ -173,7 +384,6 @@ impl Tpm2Sealer {
 
     /// Read a single PCR value from the TPM
     fn read_pcr_value(&mut self, index: u32, hash_alg: HashingAlgorithm) -> Result<Vec<u8>> {
-        // PcrSlot uses bit flags, so index 7 -> 1 << 7 = 0x80
         let slot_value = 1u32 << index;
         let slot = PcrSlot::try_from(slot_value)
             .map_err(|_| anyhow!("Invalid PCR index: {index} (slot value {slot_value})"))?;
@@ -198,7 +408,7 @@ impl Tpm2Sealer {
 
     /// Calculate PolicyPCR digest from expected values.
     /// This is the core function that allows binding to FUTURE PCR states.
-    fn calculate_pcr_policy(pcr_values: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    fn calculate_pcr_policy(pcr_values: &[(u32, Vec<u8>)], bank: HashingAlgorithm) -> Vec<u8> {
         // PolicyPCR calculation (from TPM2 spec Part 3):
         // policyDigestNew = H(policyDigestOld || TPM_CC_PolicyPCR || pcrs || digestTPM)
         // where:
@@ -207,36 +417,48 @@ impl Tpm2Sealer {
         //   - pcrs = TPML_PCR_SELECTION
         //   - digestTPM = H(concatenated PCR values)
 
-        // Start with empty policy (all zeros for SHA256)
-        let mut policy = [0u8; 32];
+        // Macro to compute policy with a specific hasher type
+        macro_rules! compute_policy {
+            ($hasher:ty, $digest_size:expr) => {{
+                // Compute PCR composite digest
+                let mut pcr_hasher = <$hasher>::new();
+                for (_, value) in pcr_values {
+                    pcr_hasher.update(value);
+                }
+                let pcr_digest = pcr_hasher.finalize();
 
-        // Compute PCR composite digest
-        let mut pcr_hasher = Sha256::new();
-        for (_, value) in pcr_values {
-            pcr_hasher.update(value);
+                // Build PCR selection structure
+                let pcr_selection = Self::build_pcr_selection_bytes(pcr_values, bank);
+
+                // Extend policy (starting from zeros)
+                let policy = vec![0u8; $digest_size];
+                let mut policy_hasher = <$hasher>::new();
+                policy_hasher.update(&policy);
+                policy_hasher.update((CommandCode::PolicyPcr as u32).to_be_bytes());
+                policy_hasher.update(&pcr_selection);
+                policy_hasher.update(pcr_digest);
+                policy_hasher.finalize().to_vec()
+            }};
         }
-        let pcr_digest = pcr_hasher.finalize();
 
-        // Build PCR selection structure
-        let pcr_selection = Self::build_pcr_selection_bytes(pcr_values);
-
-        // Extend policy: H(policy || TPM_CC_PolicyPCR || pcr_selection || pcr_digest)
-        let mut policy_hasher = Sha256::new();
-        policy_hasher.update(policy);
-        policy_hasher.update((CommandCode::PolicyPcr as u32).to_be_bytes());
-        policy_hasher.update(&pcr_selection);
-        policy_hasher.update(pcr_digest);
-        policy = policy_hasher.finalize().into();
-
-        policy.to_vec()
+        match bank {
+            HashingAlgorithm::Sha1 => {
+                use sha1::Sha1;
+                compute_policy!(Sha1, 20)
+            }
+            HashingAlgorithm::Sha384 => compute_policy!(Sha384, 48),
+            HashingAlgorithm::Sha512 => compute_policy!(Sha512, 64),
+            // SHA256 is default (and most common)
+            _ => compute_policy!(Sha256, 32),
+        }
     }
 
     /// Build PCR selection bytes in TPM2 wire format
-    fn build_pcr_selection_bytes(pcr_values: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    fn build_pcr_selection_bytes(pcr_values: &[(u32, Vec<u8>)], bank: HashingAlgorithm) -> Vec<u8> {
         // TPML_PCR_SELECTION format:
         // - count (4 bytes, big-endian)
         // - array of TPMS_PCR_SELECTION:
-        //   - hash (2 bytes, big-endian) = 0x000B (SHA256)
+        //   - hash (2 bytes, big-endian)
         //   - sizeofSelect (1 byte) = 3
         //   - pcrSelect (3 bytes for 24 PCRs)
 
@@ -245,8 +467,8 @@ impl Tpm2Sealer {
         // Count = 1 (single hash algorithm)
         buf.extend_from_slice(&1u32.to_be_bytes());
 
-        // Hash algorithm = SHA256 (0x000B)
-        buf.extend_from_slice(&TPM2_ALG_SHA256.to_be_bytes());
+        // Hash algorithm
+        buf.extend_from_slice(&hash_alg_to_tpm2_alg(bank).to_be_bytes());
 
         // sizeofSelect = 3 (24 PCRs / 8 bits)
         buf.push(3u8);
@@ -399,5 +621,244 @@ impl Tpm2Sealer {
         blob.extend_from_slice(&0u16.to_be_bytes());
 
         Ok(blob)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // ExpectedPcrValue::parse tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_pcr_index_only() {
+        let pv = ExpectedPcrValue::parse("7").unwrap();
+        assert_eq!(pv.index, 7);
+        assert!(pv.hash_alg.is_none());
+        assert!(pv.value.is_none());
+    }
+
+    #[test]
+    fn test_parse_pcr_with_algorithm() {
+        let pv = ExpectedPcrValue::parse("7:sha256").unwrap();
+        assert_eq!(pv.index, 7);
+        assert_eq!(pv.hash_alg, Some(HashingAlgorithm::Sha256));
+        assert!(pv.value.is_none());
+    }
+
+    #[test]
+    fn test_parse_pcr_with_value() {
+        let pv = ExpectedPcrValue::parse("7=abcd1234").unwrap();
+        assert_eq!(pv.index, 7);
+        assert!(pv.hash_alg.is_none());
+        assert_eq!(pv.value, Some(vec![0xab, 0xcd, 0x12, 0x34]));
+    }
+
+    #[test]
+    fn test_parse_pcr_with_algorithm_and_value() {
+        let pv = ExpectedPcrValue::parse("7:sha256=abcd").unwrap();
+        assert_eq!(pv.index, 7);
+        assert_eq!(pv.hash_alg, Some(HashingAlgorithm::Sha256));
+        assert_eq!(pv.value, Some(vec![0xab, 0xcd]));
+    }
+
+    #[test]
+    fn test_parse_pcr_all_algorithms() {
+        assert_eq!(
+            ExpectedPcrValue::parse("0:sha1").unwrap().hash_alg,
+            Some(HashingAlgorithm::Sha1)
+        );
+        assert_eq!(
+            ExpectedPcrValue::parse("0:sha256").unwrap().hash_alg,
+            Some(HashingAlgorithm::Sha256)
+        );
+        assert_eq!(
+            ExpectedPcrValue::parse("0:sha384").unwrap().hash_alg,
+            Some(HashingAlgorithm::Sha384)
+        );
+        assert_eq!(
+            ExpectedPcrValue::parse("0:sha512").unwrap().hash_alg,
+            Some(HashingAlgorithm::Sha512)
+        );
+    }
+
+    #[test]
+    fn test_parse_pcr_whitespace() {
+        let pv = ExpectedPcrValue::parse("  7  ").unwrap();
+        assert_eq!(pv.index, 7);
+    }
+
+    #[test]
+    fn test_parse_pcr_invalid_index() {
+        assert!(ExpectedPcrValue::parse("24").is_err()); // Max is 23
+        assert!(ExpectedPcrValue::parse("abc").is_err());
+        assert!(ExpectedPcrValue::parse("-1").is_err());
+    }
+
+    #[test]
+    fn test_parse_pcr_invalid_hex() {
+        assert!(ExpectedPcrValue::parse("7=notahex").is_err());
+        assert!(ExpectedPcrValue::parse("7:sha256=xyz").is_err());
+    }
+
+    #[test]
+    fn test_parse_pcr_invalid_algorithm() {
+        assert!(ExpectedPcrValue::parse("7:md5").is_err());
+        assert!(ExpectedPcrValue::parse("7:sha3").is_err());
+    }
+
+    // =========================================================================
+    // parse_pcr_index tests (well-known names)
+    // =========================================================================
+
+    #[test]
+    fn test_parse_pcr_index_names() {
+        assert_eq!(parse_pcr_index("platform-code").unwrap(), 0);
+        assert_eq!(parse_pcr_index("platform-config").unwrap(), 1);
+        assert_eq!(parse_pcr_index("secure-boot-policy").unwrap(), 7);
+        assert_eq!(parse_pcr_index("kernel-initrd").unwrap(), 9);
+        assert_eq!(parse_pcr_index("ima").unwrap(), 10);
+        assert_eq!(parse_pcr_index("system-identity").unwrap(), 15);
+        assert_eq!(parse_pcr_index("debug").unwrap(), 16);
+        assert_eq!(parse_pcr_index("application-support").unwrap(), 23);
+    }
+
+    #[test]
+    fn test_parse_pcr_index_case_insensitive() {
+        assert_eq!(parse_pcr_index("SYSTEM-IDENTITY").unwrap(), 15);
+        assert_eq!(parse_pcr_index("System-Identity").unwrap(), 15);
+    }
+
+    #[test]
+    fn test_parse_pcr_index_numeric_bounds() {
+        assert_eq!(parse_pcr_index("0").unwrap(), 0);
+        assert_eq!(parse_pcr_index("23").unwrap(), 23);
+        assert!(parse_pcr_index("24").is_err());
+    }
+
+    // =========================================================================
+    // resolve_pcr_bank tests
+    // =========================================================================
+
+    #[test]
+    fn test_resolve_pcr_bank_explicit() {
+        let pcrs = vec![ExpectedPcrValue {
+            index: 7,
+            hash_alg: Some(HashingAlgorithm::Sha384),
+            value: None,
+        }];
+        let available = vec![HashingAlgorithm::Sha256, HashingAlgorithm::Sha384];
+        assert_eq!(
+            resolve_pcr_bank(&pcrs, &available).unwrap(),
+            HashingAlgorithm::Sha384
+        );
+    }
+
+    #[test]
+    fn test_resolve_pcr_bank_auto_prefers_sha256() {
+        let pcrs = vec![ExpectedPcrValue {
+            index: 7,
+            hash_alg: None,
+            value: None,
+        }];
+        let available = vec![
+            HashingAlgorithm::Sha1,
+            HashingAlgorithm::Sha256,
+            HashingAlgorithm::Sha384,
+        ];
+        assert_eq!(
+            resolve_pcr_bank(&pcrs, &available).unwrap(),
+            HashingAlgorithm::Sha256
+        );
+    }
+
+    #[test]
+    fn test_resolve_pcr_bank_mixed_error() {
+        let pcrs = vec![
+            ExpectedPcrValue {
+                index: 7,
+                hash_alg: Some(HashingAlgorithm::Sha256),
+                value: None,
+            },
+            ExpectedPcrValue {
+                index: 15,
+                hash_alg: Some(HashingAlgorithm::Sha384),
+                value: None,
+            },
+        ];
+        let available = vec![HashingAlgorithm::Sha256, HashingAlgorithm::Sha384];
+        assert!(resolve_pcr_bank(&pcrs, &available).is_err());
+    }
+
+    #[test]
+    fn test_resolve_pcr_bank_unavailable_error() {
+        let pcrs = vec![ExpectedPcrValue {
+            index: 7,
+            hash_alg: Some(HashingAlgorithm::Sha512),
+            value: None,
+        }];
+        let available = vec![HashingAlgorithm::Sha256];
+        assert!(resolve_pcr_bank(&pcrs, &available).is_err());
+    }
+
+    #[test]
+    fn test_resolve_pcr_bank_first_explicit_wins() {
+        // First PCR specifies SHA384, second doesn't specify - should use SHA384
+        let pcrs = vec![
+            ExpectedPcrValue {
+                index: 7,
+                hash_alg: Some(HashingAlgorithm::Sha384),
+                value: None,
+            },
+            ExpectedPcrValue {
+                index: 15,
+                hash_alg: None,
+                value: None,
+            },
+        ];
+        let available = vec![HashingAlgorithm::Sha256, HashingAlgorithm::Sha384];
+        assert_eq!(
+            resolve_pcr_bank(&pcrs, &available).unwrap(),
+            HashingAlgorithm::Sha384
+        );
+    }
+
+    // =========================================================================
+    // Helper function tests
+    // =========================================================================
+
+    #[test]
+    fn test_hash_alg_name() {
+        assert_eq!(hash_alg_name(HashingAlgorithm::Sha1), "SHA1");
+        assert_eq!(hash_alg_name(HashingAlgorithm::Sha256), "SHA256");
+        assert_eq!(hash_alg_name(HashingAlgorithm::Sha384), "SHA384");
+        assert_eq!(hash_alg_name(HashingAlgorithm::Sha512), "SHA512");
+    }
+
+    #[test]
+    fn test_hash_alg_digest_size() {
+        assert_eq!(hash_alg_digest_size(HashingAlgorithm::Sha1), 20);
+        assert_eq!(hash_alg_digest_size(HashingAlgorithm::Sha256), 32);
+        assert_eq!(hash_alg_digest_size(HashingAlgorithm::Sha384), 48);
+        assert_eq!(hash_alg_digest_size(HashingAlgorithm::Sha512), 64);
+    }
+
+    #[test]
+    fn test_hash_alg_to_tpm2_alg() {
+        assert_eq!(hash_alg_to_tpm2_alg(HashingAlgorithm::Sha1), TPM2_ALG_SHA1);
+        assert_eq!(
+            hash_alg_to_tpm2_alg(HashingAlgorithm::Sha256),
+            TPM2_ALG_SHA256
+        );
+        assert_eq!(
+            hash_alg_to_tpm2_alg(HashingAlgorithm::Sha384),
+            TPM2_ALG_SHA384
+        );
+        assert_eq!(
+            hash_alg_to_tpm2_alg(HashingAlgorithm::Sha512),
+            TPM2_ALG_SHA512
+        );
     }
 }
