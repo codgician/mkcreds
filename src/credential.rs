@@ -37,7 +37,6 @@ const AES_KEY_SIZE: usize = 32;
 const AES_IV_SIZE: usize = 12; // GCM standard nonce size (systemd stores 16 but uses 12)
 const AES_TAG_SIZE: usize = 16;
 const AES_BLOCK_SIZE: usize = 1; // AES-GCM is stream mode, block size = 1 (NOT 16!)
-
 /// Sealed TPM2 data for credential
 pub struct Tpm2SealedData {
     /// Marshalled TPM2 blob (public + private)
@@ -63,13 +62,10 @@ pub struct CredentialBuilder {
 
 impl CredentialBuilder {
     pub fn new() -> Self {
-        // Get current time in microseconds since epoch
-        // If system clock is before epoch (shouldn't happen), use far-future timestamp
-        // which is safer than failing - the credential will still be valid
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
-            .unwrap_or(0); // Use epoch if clock is wrong
+            .unwrap_or(0);
 
         Self {
             name: None,
@@ -120,9 +116,7 @@ impl CredentialBuilder {
         let cipher = Aes256Gcm::new_from_slice(&aes_key)
             .map_err(|e| anyhow!("Failed to create cipher: {e}"))?;
 
-        // GCM standard uses 12-byte nonce, but systemd stores 16 bytes
-        // and uses first 12 for the actual nonce
-        let nonce = Nonce::from_slice(&iv[..12]);
+        let nonce = Nonce::from_slice(&iv[..12]); // GCM uses 12-byte nonce
 
         let ciphertext = cipher
             .encrypt(
@@ -161,10 +155,7 @@ impl CredentialBuilder {
         main.write_u32::<LittleEndian>(AES_IV_SIZE as u32)?;
         main.write_u32::<LittleEndian>(AES_TAG_SIZE as u32)?;
         main.extend_from_slice(iv);
-        // Pad to 8-byte boundary
-        while main.len() % 8 != 0 {
-            main.push(0);
-        }
+        main.resize(main.len().next_multiple_of(8), 0);
 
         // TPM2 header (tpm2_credential_header)
         // CRITICAL: blob comes FIRST, then policy_hash
@@ -189,10 +180,7 @@ impl CredentialBuilder {
         tpm2_hdr.write_u32::<LittleEndian>(policy_hash_size)?;
         tpm2_hdr.extend_from_slice(&tpm2.blob); // BLOB FIRST
         tpm2_hdr.extend_from_slice(&tpm2.policy_hash); // POLICY_HASH SECOND
-        // Pad to 8-byte boundary
-        while tpm2_hdr.len() % 8 != 0 {
-            tpm2_hdr.push(0);
-        }
+        tpm2_hdr.resize(tpm2_hdr.len().next_multiple_of(8), 0);
 
         Ok((main, tpm2_hdr))
     }
@@ -211,10 +199,7 @@ impl CredentialBuilder {
             .map_err(|_| anyhow!("Credential name too large: {} bytes", name_bytes.len()))?;
         header.write_u32::<LittleEndian>(name_size)?;
         header.extend_from_slice(name_bytes);
-        // Pad to 8-byte boundary (padding bytes act as implicit NUL terminators)
-        while header.len() % 8 != 0 {
-            header.push(0);
-        }
+        header.resize(header.len().next_multiple_of(8), 0);
 
         Ok(header)
     }

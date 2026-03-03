@@ -1,7 +1,7 @@
 //! TPM2 operations: policy calculation and sealing with expected PCR values.
 
 use anyhow::{Context, Result, anyhow};
-use sha2::{Digest, Sha256, Sha384, Sha512};
+use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use tss_esapi::{
     Context as TpmContext,
@@ -312,9 +312,13 @@ impl Tpm2Sealer {
         let primary = self.create_primary_key()?;
         let primary_handle = primary.key_handle;
 
-        // Create sealed object with policy
-        let create_result =
-            self.create_sealed_object(primary_handle, &sealed_secret, &policy_hash)?;
+        // Create sealed object (name_alg=SHA256 to match policy session)
+        let create_result = self.create_sealed_object(
+            primary_handle,
+            &sealed_secret,
+            &policy_hash,
+            HashingAlgorithm::Sha256,
+        )?;
 
         // Serialize the sealed blob
         let blob =
@@ -408,49 +412,32 @@ impl Tpm2Sealer {
 
     /// Calculate PolicyPCR digest from expected values.
     /// This is the core function that allows binding to FUTURE PCR states.
+    ///
+    /// IMPORTANT: Both digestTPM and the policy digest use SHA256, regardless of PCR bank.
+    /// The PCR bank only affects which PCR values are read and the TPML_PCR_SELECTION.
+    ///
+    /// Reference: systemd's tpm2_calculate_policy_pcr() in tpm2-util.c
     fn calculate_pcr_policy(pcr_values: &[(u32, Vec<u8>)], bank: HashingAlgorithm) -> Vec<u8> {
-        // PolicyPCR calculation (from TPM2 spec Part 3):
-        // policyDigestNew = H(policyDigestOld || TPM_CC_PolicyPCR || pcrs || digestTPM)
-        // where:
-        //   - policyDigestOld starts as all zeros
-        //   - TPM_CC_PolicyPCR = 0x0000017F
-        //   - pcrs = TPML_PCR_SELECTION
-        //   - digestTPM = H(concatenated PCR values)
+        // PolicyPCR: H(policyDigestOld || TPM_CC_PolicyPCR || pcrs || digestTPM)
+        // where H is always SHA256 (systemd's session hash)
 
-        // Macro to compute policy with a specific hasher type
-        macro_rules! compute_policy {
-            ($hasher:ty, $digest_size:expr) => {{
-                // Compute PCR composite digest
-                let mut pcr_hasher = <$hasher>::new();
-                for (_, value) in pcr_values {
-                    pcr_hasher.update(value);
-                }
-                let pcr_digest = pcr_hasher.finalize();
-
-                // Build PCR selection structure
-                let pcr_selection = Self::build_pcr_selection_bytes(pcr_values, bank);
-
-                // Extend policy (starting from zeros)
-                let policy = vec![0u8; $digest_size];
-                let mut policy_hasher = <$hasher>::new();
-                policy_hasher.update(&policy);
-                policy_hasher.update((CommandCode::PolicyPcr as u32).to_be_bytes());
-                policy_hasher.update(&pcr_selection);
-                policy_hasher.update(pcr_digest);
-                policy_hasher.finalize().to_vec()
-            }};
+        // digestTPM = SHA256(concatenated PCR values)
+        let mut pcr_hasher = Sha256::new();
+        for (_, value) in pcr_values {
+            pcr_hasher.update(value);
         }
+        let pcr_digest = pcr_hasher.finalize();
 
-        match bank {
-            HashingAlgorithm::Sha1 => {
-                use sha1::Sha1;
-                compute_policy!(Sha1, 20)
-            }
-            HashingAlgorithm::Sha384 => compute_policy!(Sha384, 48),
-            HashingAlgorithm::Sha512 => compute_policy!(Sha512, 64),
-            // SHA256 is default (and most common)
-            _ => compute_policy!(Sha256, 32),
-        }
+        // pcrs = TPML_PCR_SELECTION
+        let pcr_selection = Self::build_pcr_selection_bytes(pcr_values, bank);
+
+        // Extend empty policy with PolicyPCR
+        let mut policy_hasher = Sha256::new();
+        policy_hasher.update([0u8; 32]); // policyDigestOld = zeros
+        policy_hasher.update((CommandCode::PolicyPcr as u32).to_be_bytes());
+        policy_hasher.update(&pcr_selection);
+        policy_hasher.update(pcr_digest);
+        policy_hasher.finalize().to_vec()
     }
 
     /// Build PCR selection bytes in TPM2 wire format
@@ -543,6 +530,7 @@ impl Tpm2Sealer {
         parent: KeyHandle,
         secret: &[u8],
         policy_digest: &[u8],
+        name_alg: HashingAlgorithm,
     ) -> Result<CreateKeyResult> {
         if secret.len() > TPM2_MAX_SEALED_DATA {
             return Err(anyhow!(
@@ -563,7 +551,7 @@ impl Tpm2Sealer {
 
         let public = PublicBuilder::new()
             .with_public_algorithm(PublicAlgorithm::KeyedHash)
-            .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+            .with_name_hashing_algorithm(name_alg)
             .with_object_attributes(object_attributes)
             .with_auth_policy(policy)
             .with_keyed_hash_parameters(tss_esapi::structures::PublicKeyedHashParameters::new(

@@ -128,7 +128,7 @@ fn main() -> Result<()> {
             .calculate_policy_only(&pcr_values)
             .context("Failed to calculate policy")?;
         println!("{}", hex::encode(&policy_hash));
-        eprintln!("Policy hash calculated using {} bank", hash_alg_name(bank));
+        eprintln!("Policy hash (SHA256) for {} PCR bank", hash_alg_name(bank));
         return Ok(());
     }
 

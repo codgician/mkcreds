@@ -1,13 +1,13 @@
-# Comprehensive encryption tests for mkcreds
-# Tests all encryption scenarios in a single VM boot to reduce overhead
-# Run with: nix build .#checks.x86_64-linux.encryption
+# Comprehensive encryption tests for mkcreds (SHA256 bank)
+# Tests all encryption scenarios with SHA256 PCR bank (default)
+# Run with: nix build .#checks.x86_64-linux.encryption-sha256
 { pkgs, mkcreds }:
 
 let
   common = import ../common.nix { inherit pkgs mkcreds; };
 in
 common.mkTest {
-  name = "mkcreds-encryption";
+  name = "mkcreds-encryption-sha256";
 
   testScript = ''
     import time
@@ -47,14 +47,23 @@ common.mkTest {
         assert decrypted == "sha256-secret", f"Decrypted content mismatch: got '{decrypted}'"
         machine.log("Explicit SHA256 bank test passed")
 
-    with subtest("Some PCRs with hash algo, some without"):
+    with subtest("First PCR has algo, second inherits (7:sha256+15)"):
         # First specifies algorithm, second inherits it
-        machine.succeed("echo -n 'partial-algo-secret' | mkcreds --tpm2-pcrs='7:sha256+15' - /tmp/partial_algo.cred")
-        machine.succeed("test -s /tmp/partial_algo.cred")
+        machine.succeed("echo -n 'first-algo-secret' | mkcreds --tpm2-pcrs='7:sha256+15' - /tmp/first_algo.cred")
+        machine.succeed("test -s /tmp/first_algo.cred")
 
-        decrypted = machine.succeed("systemd-creds decrypt --name=partial_algo /tmp/partial_algo.cred -").strip()
-        assert decrypted == "partial-algo-secret", f"Decrypted content mismatch: got '{decrypted}'"
-        machine.log("Partial algorithm specification test passed")
+        decrypted = machine.succeed("systemd-creds decrypt --name=first_algo /tmp/first_algo.cred -").strip()
+        assert decrypted == "first-algo-secret", f"Decrypted content mismatch: got '{decrypted}'"
+        machine.log("First PCR has algo test passed")
+
+    with subtest("Second PCR has algo, first inherits (7+15:sha256)"):
+        # Second specifies algorithm, first inherits it (systemd-cryptenroll compatible)
+        machine.succeed("echo -n 'second-algo-secret' | mkcreds --tpm2-pcrs='7+15:sha256' - /tmp/second_algo.cred")
+        machine.succeed("test -s /tmp/second_algo.cred")
+
+        decrypted = machine.succeed("systemd-creds decrypt --name=second_algo /tmp/second_algo.cred -").strip()
+        assert decrypted == "second-algo-secret", f"Decrypted content mismatch: got '{decrypted}'"
+        machine.log("Second PCR has algo test passed (systemd-cryptenroll compatible)")
 
     with subtest("All PCRs with explicit hash algo"):
         machine.succeed("echo -n 'all-algo-secret' | mkcreds --tpm2-pcrs='7:sha256+15:sha256' - /tmp/all_algo.cred")
