@@ -37,6 +37,7 @@ const AES_KEY_SIZE: usize = 32;
 const AES_IV_SIZE: usize = 12; // GCM standard nonce size (systemd stores 16 but uses 12)
 const AES_TAG_SIZE: usize = 16;
 const AES_BLOCK_SIZE: usize = 1; // AES-GCM is stream mode, block size = 1 (NOT 16!)
+
 /// Sealed TPM2 data for credential
 pub struct Tpm2SealedData {
     /// Marshalled TPM2 blob (public + private)

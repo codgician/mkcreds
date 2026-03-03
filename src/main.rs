@@ -150,10 +150,11 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| derive_name_from_output(&args.output));
 
     // Parse not-after timestamp if provided
-    let not_after = match &args.not_after {
-        Some(s) => Some(parse_timestamp(s)?),
-        None => None,
-    };
+    let not_after = args
+        .not_after
+        .as_ref()
+        .map(|s| parse_timestamp(s))
+        .transpose()?;
 
     // Build systemd-creds compatible credential
     let mut builder = CredentialBuilder::new();
