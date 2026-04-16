@@ -43,7 +43,7 @@ jobs:
       - name: Build
         run: nix build .#packages.${{ matrix.system }}.default
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mkcreds-${{ matrix.system }}
           path: result/bin/mkcreds
