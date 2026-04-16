@@ -99,7 +99,8 @@ impl CredentialBuilder {
 
         // Generate random IV
         let mut iv = [0u8; AES_IV_SIZE];
-        rand::thread_rng().fill_bytes(&mut iv);
+        let mut rng = rand::rng();
+        rng.fill_bytes(&mut iv);
 
         // Build headers
         let (main_header, tpm2_header) = Self::build_headers(&iv, tpm2)?;

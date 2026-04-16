@@ -1,6 +1,7 @@
 //! TPM2 operations: policy calculation and sealing with expected PCR values.
 
 use anyhow::{Context, Result, anyhow};
+use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use tss_esapi::{
@@ -298,7 +299,8 @@ impl Tpm2Sealer {
 
         // Generate random key to seal
         let mut sealed_secret = Zeroizing::new(vec![0u8; SEALED_KEY_SIZE]);
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut sealed_secret);
+        let mut rng = rand::rng();
+        rng.fill_bytes(&mut sealed_secret);
 
         // Resolve any PCR values that need to be read from TPM
         let resolved_values = self.resolve_pcr_values(pcr_values, pcr_bank)?;
