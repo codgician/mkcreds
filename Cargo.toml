@@ -27,7 +27,7 @@ anyhow = "1"
 
 # Misc
 byteorder = "1"
-rand = "0.9"
+rand = "0.10"
 zeroize = "1"
 
 [profile.release]
