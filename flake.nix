@@ -87,6 +87,7 @@
             commonArgs
             cargoArtifacts
             mkcreds
+            nativeBuildInputs
             ;
         };
 
@@ -126,7 +127,7 @@
         {
           default = s.craneLib.devShell {
             inherit (s) buildInputs;
-            packages = [
+            packages = s.nativeBuildInputs ++ [
               s.pkgs.rust-analyzer
               s.pkgs.cargo-watch
               s.pkgs.tpm2-tools

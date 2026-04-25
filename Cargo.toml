@@ -1,6 +1,6 @@
 [package]
 name = "mkcreds"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Create systemd-creds compatible TPM2-sealed credentials with custom PCR values"
 license = "LGPL-2.1"

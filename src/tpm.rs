@@ -1,7 +1,7 @@
 //! TPM2 operations: policy calculation and sealing with expected PCR values.
 
 use anyhow::{Context, Result, anyhow};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::str::FromStr;
 use tss_esapi::{

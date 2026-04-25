@@ -19,7 +19,7 @@ use aes_gcm::{
 };
 use anyhow::{Result, anyhow};
 use byteorder::{LittleEndian, WriteBytesExt};
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
