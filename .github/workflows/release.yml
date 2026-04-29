@@ -46,7 +46,7 @@ jobs:
           echo "Timeout waiting for build workflow"
           exit 1
       - name: Download artifacts from build workflow
-        uses: dawidd6/action-download-artifact@v20
+        uses: dawidd6/action-download-artifact@v21
         with:
           workflow: build.yml
           commit: ${{ github.sha }}
