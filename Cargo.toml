@@ -20,7 +20,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Serialization
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 
 # Error handling
 anyhow = "1"
