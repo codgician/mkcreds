@@ -14,8 +14,8 @@
 //! - This is what systemd calls "sha256_hash_host_and_tpm2_key" (with host_key empty)
 
 use aes_gcm::{
-    Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit},
+    Aes256Gcm,
+    aead::{Aead, KeyInit, Nonce},
 };
 use anyhow::{Result, anyhow};
 use byteorder::{LittleEndian, WriteBytesExt};
@@ -117,7 +117,8 @@ impl CredentialBuilder {
         let cipher = Aes256Gcm::new_from_slice(&aes_key)
             .map_err(|e| anyhow!("Failed to create cipher: {e}"))?;
 
-        let nonce = Nonce::from_slice(&iv[..12]); // GCM uses 12-byte nonce
+        let nonce = <&Nonce<Aes256Gcm>>::try_from(&iv[..])
+            .map_err(|_| anyhow!("Invalid AES-GCM nonce length: {}", iv.len()))?;
 
         let ciphertext = cipher
             .encrypt(
